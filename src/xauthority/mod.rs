@@ -33,19 +33,19 @@ fn get_hostname() -> Hostname {
 // Session should stay alive as clients fallback to local
 // Are there any side-effects? What breaks?
 pub struct XAuthorityManager {
-    lock: bool,
+    skip_locks: bool,
     runtime_dir: RuntimeDir,
     cookie: Cookie,
     hostname: Hostname,
 }
 
 impl XAuthorityManager {
-    pub fn new(runtime_dir: RuntimeDir, lock: bool) -> Result<Self> {
+    pub fn new(runtime_dir: RuntimeDir, skip_locks: bool) -> Result<Self> {
         let cookie = make_cookie()?;
         let hostname = get_hostname();
 
         Ok(Self {
-            lock,
+            skip_locks,
             runtime_dir,
             cookie,
             hostname,
@@ -53,13 +53,13 @@ impl XAuthorityManager {
     }
 
     fn create_auth_file(&self, path: &Path) -> io::Result<AuthorityFile> {
-        if self.lock {
-            AuthorityFile::create(path)
-        } else {
+        if self.skip_locks {
             // Safety: setting lock=false means user explicitly guarantees no other
             // party will interact with runtime dir on setup
             // TODO: maybe propagate safety of lock option better
             unsafe { AuthorityFile::create_unlocked(path) }
+        } else {
+            AuthorityFile::create(path)
         }
     }
 

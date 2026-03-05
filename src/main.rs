@@ -6,15 +6,21 @@ mod xauthority;
 use std::{
     io::{BufRead, BufReader, PipeReader, pipe},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use facet::Facet;
+use figue as fig;
 
 use crate::{
-    environment::EnvironmentParse,
+    environment::{Env, EnvironmentParse},
+    runtime_dir::RuntimeDirManager,
     utils::fd::{CommandFdCtxExt, FdContext},
+    xauthority::XAuthorityManager,
 };
+
+static DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 
 environment::define_env!(Seat(String) = parse "XDG_SEAT");
 environment::define_env!(pub VtNumber(u8) = "XDG_VTNR");
@@ -65,7 +71,7 @@ impl DisplayReceiver {
         Ok(Self(display_rx))
     }
 
-    async fn display(self) -> Result<Display> {
+    fn blocking_wait(self) -> Result<Display> {
         let mut reader = BufReader::new(self.0);
         let mut display_buf = String::new();
 
@@ -91,7 +97,7 @@ fn spawn_server(
     authority: PathBuf,
     vt: VtNumber,
     seat: Option<Seat>,
-) -> Result<DisplayReceiver> {
+) -> Result<(DisplayReceiver, Child)> {
     let mut fd_ctx = FdContext::new(3..5);
 
     let mut command = Command::new(path);
@@ -111,11 +117,57 @@ fn spawn_server(
     let display_rx = DisplayReceiver::setup(&mut fd_ctx, &mut command)?;
     command.with_fd_context(fd_ctx);
 
-    // TODO: spawn and proxy logs
+    // TODO: proxy logs
+    let child = command.spawn()?;
 
-    Ok(display_rx)
+    Ok((display_rx, child))
 }
 
-fn main() {
-    println!("Hello, world!");
+#[derive(Facet)]
+struct Args {
+    #[facet(fig::positional)]
+    client: Option<PathBuf>,
+    #[facet(default = DEFAULT_XORG_PATH)]
+    xorg_path: PathBuf,
+    #[facet(default = false)]
+    skip_locks: bool,
+}
+
+fn main() -> Result<()> {
+    let env = environment::EnvOs::new_view();
+    let args: Args = fig::from_std_args().unwrap();
+
+    // TODO: add an unsafe option to try and determine one anyway
+    let vt = env.get::<VtNumber>().context("Cannot find a VT number allocated for current session. Are you running this from a correct place?")?;
+    let seat = env.get::<Seat>();
+
+    // TODO: warn on seat error
+
+    let rt_dir_manager =
+        RuntimeDirManager::from_env(&env).context("Cannot setup runtime dir manager")?;
+
+    let runtime_dir = rt_dir_manager
+        .create(&format!("xshim-{}", vt.0))
+        .context("Cannot create runtime directory")?;
+
+    let authority_manager = XAuthorityManager::new(runtime_dir, args.skip_locks)
+        .context("Cannot setup XAuthority manager")?;
+
+    let server_authority = authority_manager
+        .setup_server()
+        .context("Failed to define server authority")?;
+
+    let (future_display, xorg_child) =
+        spawn_server(&args.xorg_path, server_authority, vt, seat.ok())
+            .context("Failed to spawn Xorg")?;
+
+    let display = future_display.blocking_wait()?;
+
+    let client_authority = authority_manager
+        .setup_client(&display)
+        .context("failed to define client authority")?;
+
+    // TODO: spawn client
+
+    Ok(())
 }

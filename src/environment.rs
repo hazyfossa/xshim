@@ -79,14 +79,14 @@ macro_rules! _define_env {
 
 type EnvEntry = (String, OsString);
 
-trait EnvRaw {
+pub trait EnvRaw {
     fn raw_get(&self, key: &str) -> Option<OsString>;
     fn raw_merge(&mut self, diff: impl EnvDiff);
 }
 
 // Typed
 
-pub trait Env: EnvRaw + IntoIterator<Item = EnvEntry> {
+pub trait Env: EnvRaw + EnvDiff {
     fn get<T: EnvironmentVariable>(&self) -> Result<T> {
         let raw = self
             .raw_get(T::KEY)
@@ -101,9 +101,21 @@ pub trait Env: EnvRaw + IntoIterator<Item = EnvEntry> {
     }
 }
 
+impl<T> Env for T where T: EnvRaw + EnvDiff {}
+
 // Buf
 
 pub struct EnvBuf(HashMap<String, OsString>);
+
+impl EnvBuf {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    pub fn from_values(values: impl IntoIterator<Item = EnvEntry>) -> Self {
+        Self(values.into_iter().collect())
+    }
+}
 
 impl EnvRaw for EnvBuf {
     fn raw_get(&self, key: &str) -> Option<OsString> {
@@ -116,12 +128,6 @@ impl EnvRaw for EnvBuf {
     }
 }
 
-impl EnvBuf {
-    pub fn from_values(values: impl IntoIterator<Item = EnvEntry>) -> Self {
-        Self(values.into_iter().collect())
-    }
-}
-
 impl EnvDiff for EnvBuf {
     fn to_env_diff(self) -> impl IntoIterator<Item = (String, OsString)> {
         self.0
@@ -131,19 +137,46 @@ impl EnvDiff for EnvBuf {
 // System
 
 pub struct EnvOs {
-    new: EnvBuf,
+    append_buf: EnvBuf,
+}
+
+impl EnvOs {
+    /// This creates a new view os the system environment
+    ///
+    /// Keep in mind that setting a variable is scoped per view
+    /// For example, in this case:
+    /// ```
+    /// let a = EnvOs::new_view();
+    /// a.set("foo=bar")
+    ///
+    /// let b = EnvOs::new_view();
+    /// let x = b.raw_get("foo")
+    /// ```
+    /// x will either be None, or what has been in the system's native env.
+    ///
+    /// This also means that changes to views won't affect the current process env,
+    /// eliminating spooky action at a distance.
+    ///
+    /// If you want to concurrently share an env view across your system,
+    /// you can do it much like with any other struct.
+    /// A common approach for async is Arc<Mutex<...>>
+    pub fn new_view() -> Self {
+        Self {
+            append_buf: EnvBuf::new(),
+        }
+    }
 }
 
 impl EnvRaw for EnvOs {
     fn raw_get(&self, key: &str) -> Option<OsString> {
-        match self.new.raw_get(key) {
+        match self.append_buf.raw_get(key) {
             Some(set) => return Some(set),
             None => sys::var_os(key),
         }
     }
 
     fn raw_merge(&mut self, diff: impl EnvDiff) {
-        self.new.raw_merge(diff);
+        self.append_buf.raw_merge(diff);
     }
 }
 
@@ -154,7 +187,7 @@ impl EnvDiff for EnvOs {
         // NOTE: this ignores variables with non-utf8 keys
         sys::vars_os()
             .filter_map(|(key, value)| Some((key.into_string().ok()?, value)))
-            .chain(self.new.to_env_diff())
+            .chain(self.append_buf.to_env_diff())
     }
 }
 
@@ -219,7 +252,8 @@ mod env_container_variadics {
 
 trait EnvVecExt: Env + Sized {
     fn to_vec(self) -> Vec<OsString> {
-        self.into_iter()
+        self.to_env_diff()
+            .into_iter()
             .map(|pair| {
                 let mut merged = OsString::new();
 
