@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-use crate::environment::{Env, define_env};
+use crate::frame::environment::{Env, define_env};
 
 pub struct RuntimeDir {
     pub path: PathBuf,

@@ -1,4 +1,5 @@
-mod environment;
+mod env_definitions;
+mod frame;
 mod runtime_dir;
 mod utils;
 mod xauthority;
@@ -9,54 +10,19 @@ use std::{
     process::{Child, Command},
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use facet::Facet;
 use figue as fig;
 
 use crate::{
-    environment::{Env, EnvironmentParse},
+    env_definitions::*,
+    frame::environment::{Env, EnvOs},
     runtime_dir::RuntimeDirManager,
     utils::fd::{CommandFdCtxExt, FdContext},
     xauthority::XAuthorityManager,
 };
 
 static DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
-
-environment::define_env!(Seat(String) = parse "XDG_SEAT");
-environment::define_env!(pub VtNumber(u8) = "XDG_VTNR");
-
-impl EnvironmentParse<String> for VtNumber {
-    fn env_serialize(self) -> String {
-        self.0.to_string()
-    }
-
-    fn env_deserialize(raw: String) -> anyhow::Result<Self> {
-        Ok(Self(raw.parse()?))
-    }
-}
-
-environment::define_env!(Display(u8) = "DISPLAY");
-
-impl Display {
-    fn number(&self) -> u8 {
-        self.0
-    }
-}
-
-impl EnvironmentParse<String> for Display {
-    fn env_serialize(self) -> String {
-        format!(":{}", self.0).into()
-    }
-
-    fn env_deserialize(value: String) -> Result<Self> {
-        Ok(Self(
-            value
-                .strip_prefix(":")
-                .ok_or(anyhow!("display should start with :"))?
-                .parse()?,
-        ))
-    }
-}
 
 struct DisplayReceiver(PipeReader);
 
@@ -88,7 +54,7 @@ impl DisplayReceiver {
             .parse()
             .context("Xorg provided invalid display number")?;
 
-        Ok(Display(display_number))
+        Ok(Display::from_number(display_number))
     }
 }
 
@@ -103,11 +69,11 @@ fn spawn_server(
     let mut command = Command::new(path);
 
     if let Some(seat) = seat {
-        command.args(["-seat".into(), seat.0]);
+        command.args(["-seat", &seat]);
     }
 
     command
-        .arg(format!("vt{}", vt.0.to_string()))
+        .arg(format!("vt{}", vt.to_string()))
         .args(["-auth".into(), authority])
         .args(["-nolisten", "tcp"])
         .args(["-background", "none", "-noreset", "-keeptty", "-novtswitch"])
@@ -134,21 +100,24 @@ struct Args {
 }
 
 fn main() -> Result<()> {
-    let env = environment::EnvOs::new_view();
+    let env = EnvOs::new_view();
     let args: Args = fig::from_std_args().unwrap();
 
     // TODO: add an unsafe option to try and determine one anyway
     let vt = env.get::<VtNumber>().context("Cannot find a VT number allocated for current session. Are you running this from a correct place?")?;
     let seat = env.get::<Seat>();
 
-    // TODO: warn on seat error
+    // TODO: is this even relevant?
+    let window_path = WindowPath::previous_plus_vt(&env, &vt);
+
+    // TODO: warn on seat empty
 
     let rt_dir_manager =
         RuntimeDirManager::from_env(&env).context("Cannot setup runtime dir manager")?;
 
     let runtime_dir = rt_dir_manager
-        .create(&format!("xshim-{}", vt.0))
-        .context("Cannot create runtime directory")?;
+        .create(&format!("xshim-{}", *vt))
+        .context("Failed to create runtime directory")?;
 
     let authority_manager = XAuthorityManager::new(runtime_dir, args.skip_locks)
         .context("Cannot setup XAuthority manager")?;
@@ -166,6 +135,9 @@ fn main() -> Result<()> {
     let client_authority = authority_manager
         .setup_client(&display)
         .context("failed to define client authority")?;
+
+    // NOTE: RuntimeDir persists until main is closed
+    authority_manager.finish();
 
     // TODO: spawn client
 

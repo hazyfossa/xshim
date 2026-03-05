@@ -43,6 +43,21 @@ env_parse_raw!(OsString, PathBuf);
 env_parse_raw!(OsString, OsString);
 env_parse_raw!(String, String);
 
+// Requires cooperation with macro
+// impl<T> EnvironmentParse<String> for T
+// where
+//     T: FromStr + ToString,
+//     T::Err: Into<anyhow::Error>,
+// {
+//     fn env_serialize(self) -> String {
+//         self.to_string()
+//     }
+
+//     fn env_deserialize(raw: String) -> Result<Self> {
+//         Ok(raw.parse().map_err(|e: T::Err| e.into())?)
+//     }
+// }
+
 // Define
 
 pub trait EnvironmentVariable: EnvironmentParse<OsString> {
@@ -53,7 +68,7 @@ pub use crate::_define_env as define_env;
 #[macro_export]
 macro_rules! _define_env {
     ($vis:vis $name:ident ($repr:ty) = parse $key:expr) => {
-        impl crate::environment::EnvironmentParse<std::ffi::OsString> for $name {
+        impl crate::frame::environment::EnvironmentParse<std::ffi::OsString> for $name {
             fn env_serialize(self) -> std::ffi::OsString { self.0.env_serialize() }
 
             fn env_deserialize(raw: std::ffi::OsString) -> anyhow::Result<Self> {
@@ -67,8 +82,15 @@ macro_rules! _define_env {
     ($vis:vis $name:ident ($repr:ty) = $key:expr) => {
         $vis struct $name($repr);
 
-        impl crate::environment::EnvironmentVariable for $name {
+        impl crate::frame::environment::EnvironmentVariable for $name {
             const KEY: &str = $key;
+        }
+
+        impl std::ops::Deref for $name {
+            type Target = $repr;
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
         }
     };
 }
