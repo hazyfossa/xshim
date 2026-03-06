@@ -10,3 +10,10 @@ binrw = "0.15.1"
 command-fds = "0.3.2"
 rustix = { version = "1.1.4", features = ["process", "rand", "system"] }
 zeroize = { version = "1.8.2", features = ["derive"] }
+
+[profile.release]
+opt-level = "s"
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
