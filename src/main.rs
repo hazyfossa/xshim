@@ -77,6 +77,10 @@ fn spawn_server(
         command.args(["-seat", &seat]);
     }
 
+    // TODO: is it still good practice to add -novtswitch
+    // even though xshim does not perform work on tty/vt
+    // and neither does it call logind
+
     command
         .arg(format!("vt{}", vt.to_string()))
         .args(["-auth".into(), authority])
@@ -171,7 +175,7 @@ fn main() -> Result<()> {
     authority_manager.finish();
 
     let mut client_child = spawn_with_cleanup(
-        Command::new(args.client).envs((client_authority, window_path).to_env_diff()),
+        Command::new(args.client).envs((display, client_authority, window_path).to_env_diff()),
     )
     .context("Failed to spawn client")?;
 
