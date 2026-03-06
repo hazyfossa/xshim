@@ -11,8 +11,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use facet::Facet;
-use figue as fig;
+use argh::FromArgs;
 
 use crate::{
     env_definitions::*,
@@ -92,21 +91,37 @@ fn spawn_server(
     Ok((display_rx, child))
 }
 
-#[derive(Facet)]
+#[derive(FromArgs)]
+/// Run Xorg like a wayland session
 struct Args {
-    #[facet(fig::positional)]
+    #[argh(positional)]
+    /// client executable
     client: PathBuf,
-    #[facet(default = DEFAULT_XORG_PATH)]
+    #[argh(option, default = "DEFAULT_XORG_PATH.into()")]
+    /// override the path used to exec Xorg
     xorg_path: PathBuf,
-    #[facet(default = false)]
+    #[argh(switch)]
+    /// omit XAuthority locking (use at your own risk!)
     skip_locks: bool,
+}
+
+// TODO: display this somewhere
+fn _help_skip_locks() {
+    println!(
+        "Using this switch will omit standard XAuthority locking.
+
+    This marginally increases performance, but could lead to conflicts
+    if something else tries to interact with XAuthority alongside xshim.
+
+    Use at your own risk!"
+    )
 }
 
 // TODO: xinit compat mode
 
 fn main() -> Result<()> {
     let env = EnvOs::new_view();
-    let args: Args = fig::from_std_args().unwrap();
+    let args: Args = argh::from_env();
 
     // TODO: add an unsafe option to try and determine one anyway
     let vt = env.get::<VtNumber>().context("Cannot find a VT number allocated for current session. Are you running this from a correct place?")?;
