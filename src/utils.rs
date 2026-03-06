@@ -56,3 +56,51 @@ pub mod fd {
         }
     }
 }
+
+pub mod subprocess {
+    use std::{
+        io,
+        ops::{Deref, DerefMut},
+        os::unix::process::CommandExt,
+        process::{Child, Command},
+    };
+
+    use rustix::process::{Pid, Signal, kill_process, set_parent_process_death_signal};
+
+    pub struct ChildWithCleanup(Child);
+
+    impl Deref for ChildWithCleanup {
+        type Target = Child;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl DerefMut for ChildWithCleanup {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
+    impl Drop for ChildWithCleanup {
+        fn drop(&mut self) {
+            let ret = kill_process(Pid::from_child(&self.0), Signal::TERM);
+
+            if ret.is_ok() {
+                let _best_effort = self.0.wait();
+            }
+        }
+    }
+
+    pub fn spawn_with_cleanup(command: &mut Command) -> Result<ChildWithCleanup, io::Error> {
+        // Safety: derived from rustix safety
+        let command = unsafe {
+            command.pre_exec(|| {
+                set_parent_process_death_signal(Some(Signal::KILL))?;
+                Ok(())
+            })
+        };
+        let child = command.spawn()?;
+        Ok(ChildWithCleanup(child))
+    }
+}

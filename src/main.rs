@@ -7,7 +7,7 @@ mod xauthority;
 use std::{
     io::{BufRead, BufReader, PipeReader, pipe},
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::Command,
 };
 
 use anyhow::{Context, Result, bail};
@@ -16,9 +16,12 @@ use figue as fig;
 
 use crate::{
     env_definitions::*,
-    frame::environment::{Env, EnvOs},
+    frame::environment::{Env, EnvDiff, EnvOs},
     runtime_dir::RuntimeDirManager,
-    utils::fd::{CommandFdCtxExt, FdContext},
+    utils::{
+        fd::{CommandFdCtxExt, FdContext},
+        subprocess::{ChildWithCleanup, spawn_with_cleanup},
+    },
     xauthority::XAuthorityManager,
 };
 
@@ -63,7 +66,7 @@ fn spawn_server(
     authority: PathBuf,
     vt: VtNumber,
     seat: Option<Seat>,
-) -> Result<(DisplayReceiver, Child)> {
+) -> Result<(DisplayReceiver, ChildWithCleanup)> {
     let mut fd_ctx = FdContext::new(3..5);
 
     let mut command = Command::new(path);
@@ -84,7 +87,7 @@ fn spawn_server(
     command.with_fd_context(fd_ctx);
 
     // TODO: proxy logs
-    let child = command.spawn()?;
+    let child = spawn_with_cleanup(&mut command).context("Failed to spawn Xorg")?;
 
     Ok((display_rx, child))
 }
@@ -92,12 +95,14 @@ fn spawn_server(
 #[derive(Facet)]
 struct Args {
     #[facet(fig::positional)]
-    client: Option<PathBuf>,
+    client: PathBuf,
     #[facet(default = DEFAULT_XORG_PATH)]
     xorg_path: PathBuf,
     #[facet(default = false)]
     skip_locks: bool,
 }
+
+// TODO: xinit compat mode
 
 fn main() -> Result<()> {
     let env = EnvOs::new_view();
@@ -126,7 +131,7 @@ fn main() -> Result<()> {
         .setup_server()
         .context("Failed to define server authority")?;
 
-    let (future_display, xorg_child) =
+    let (future_display, _xorg_child) =
         spawn_server(&args.xorg_path, server_authority, vt, seat.ok())
             .context("Failed to spawn Xorg")?;
 
@@ -139,7 +144,16 @@ fn main() -> Result<()> {
     // NOTE: RuntimeDir persists until main is closed
     authority_manager.finish();
 
-    // TODO: spawn client
+    let mut client_child = spawn_with_cleanup(
+        Command::new(args.client).envs((client_authority, window_path).to_env_diff()),
+    )
+    .context("Failed to spawn client")?;
+
+    // TODO: is there a point in waiting on Xorg? Client should always close if XServer drops, right?
+
+    client_child
+        .wait()
+        .context("Error while waiting on client")?;
 
     Ok(())
 }
