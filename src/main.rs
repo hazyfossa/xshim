@@ -1,6 +1,7 @@
 mod env_definitions;
 mod frame;
 mod runtime_dir;
+mod systemd;
 mod utils;
 mod xauthority;
 
@@ -17,6 +18,7 @@ use crate::{
     env_definitions::*,
     frame::environment::{Env, EnvDiff, EnvOs},
     runtime_dir::RuntimeDirManager,
+    systemd::notify::Notifier,
     utils::{
         fd::{CommandFdCtxExt, FdContext},
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
@@ -24,6 +26,7 @@ use crate::{
     xauthority::XAuthorityManager,
 };
 
+// You may want to change this appropriately if you're making a package
 static DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 
 struct DisplayReceiver(PipeReader);
@@ -103,6 +106,9 @@ struct Args {
     #[argh(switch)]
     /// omit XAuthority locking (use at your own risk!)
     skip_locks: bool,
+    #[argh(switch)]
+    /// use systemd notifications
+    notify: bool,
 }
 
 // TODO: display this somewhere
@@ -131,6 +137,11 @@ fn main() -> Result<()> {
     let window_path = WindowPath::previous_plus_vt(&env, &vt);
 
     // TODO: warn on seat empty
+
+    let mut notifier = match args.notify {
+        true => Some(Notifier::from_env(&env).context("Failed to setup systemd notifications")?),
+        false => None,
+    };
 
     let rt_dir_manager =
         RuntimeDirManager::from_env(&env).context("Cannot setup runtime dir manager")?;
@@ -164,11 +175,21 @@ fn main() -> Result<()> {
     )
     .context("Failed to spawn client")?;
 
+    if let Some(ref mut notifier) = notifier {
+        notifier
+            .notify_ready()
+            .context("Failed to signal readiness")?;
+    }
+
     // TODO: is there a point in waiting on Xorg? Client should always close if XServer drops, right?
 
     client_child
         .wait()
         .context("Error while waiting on client")?;
+
+    if let Some(ref mut notifier) = notifier {
+        let _best_effort = notifier.notify_stopping();
+    }
 
     Ok(())
 }
