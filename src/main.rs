@@ -27,7 +27,7 @@ use crate::{
 };
 
 // You may want to change this appropriately if you're making a package
-static DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
+const DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 
 struct DisplayReceiver(PipeReader);
 

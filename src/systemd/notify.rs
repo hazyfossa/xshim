@@ -38,8 +38,4 @@ impl Notifier {
     pub fn notify_stopping(&mut self) -> Result<()> {
         self.notify("STOPPING=1")
     }
-
-    pub fn set_status(&mut self, status: &str) -> Result<()> {
-        self.notify(&format!("STATUS={status}"))
-    }
 }
