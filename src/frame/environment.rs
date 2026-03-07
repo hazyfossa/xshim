@@ -26,7 +26,7 @@ impl<T: EnvironmentParse<String>> EnvironmentParse<OsString> for T {
 }
 
 macro_rules! env_parse_raw {
-    ($ty:ty, $t:ident) => {
+    ($t:ident => $ty:ty) => {
         impl EnvironmentParse<$ty> for $t {
             fn env_serialize(self) -> $ty {
                 self.into()
@@ -39,24 +39,9 @@ macro_rules! env_parse_raw {
     };
 }
 
-env_parse_raw!(OsString, PathBuf);
-env_parse_raw!(OsString, OsString);
-env_parse_raw!(String, String);
-
-// Requires cooperation with macro
-// impl<T> EnvironmentParse<String> for T
-// where
-//     T: FromStr + ToString,
-//     T::Err: Into<anyhow::Error>,
-// {
-//     fn env_serialize(self) -> String {
-//         self.to_string()
-//     }
-
-//     fn env_deserialize(raw: String) -> Result<Self> {
-//         Ok(raw.parse().map_err(|e: T::Err| e.into())?)
-//     }
-// }
+env_parse_raw!(PathBuf => OsString);
+env_parse_raw!(OsString => OsString);
+env_parse_raw!(String => String);
 
 // Define
 
@@ -67,6 +52,21 @@ pub trait EnvironmentVariable: EnvironmentParse<OsString> {
 pub use crate::_define_env as define_env;
 #[macro_export]
 macro_rules! _define_env {
+    ($vis:vis $name:ident ($repr:ty) = auto parse $key:expr) => {
+        impl EnvironmentParse<String> for $name
+        {
+            fn env_serialize(self) -> String {
+                self.0.to_string()
+            }
+
+            fn env_deserialize(raw: String) -> Result<Self> {
+                Ok(Self(raw.parse()?))
+            }
+        }
+
+        $crate::_define_env!($vis $name ($repr) = $key);
+    };
+
     ($vis:vis $name:ident ($repr:ty) = parse $key:expr) => {
         impl crate::frame::environment::EnvironmentParse<std::ffi::OsString> for $name {
             fn env_serialize(self) -> std::ffi::OsString { self.0.env_serialize() }
@@ -76,7 +76,7 @@ macro_rules! _define_env {
             }
         }
 
-        crate::_define_env!($vis $name ($repr) = $key);
+        $crate::_define_env!($vis $name ($repr) = $key);
     };
 
     ($vis:vis $name:ident ($repr:ty) = $key:expr) => {

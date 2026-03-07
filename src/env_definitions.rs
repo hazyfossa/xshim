@@ -3,17 +3,7 @@ use anyhow::{Result, anyhow};
 use crate::frame::environment::{Env, EnvironmentParse, define_env};
 
 define_env!(pub Seat(String) = parse "XDG_SEAT");
-define_env!(pub VtNumber(u8) = "XDG_VTNR");
-
-impl EnvironmentParse<String> for VtNumber {
-    fn env_serialize(self) -> String {
-        self.0.to_string()
-    }
-
-    fn env_deserialize(raw: String) -> anyhow::Result<Self> {
-        Ok(Self(raw.parse()?))
-    }
-}
+define_env!(pub VtNumber(u8) = auto parse "XDG_VTNR");
 
 define_env!(pub Display(u8) = "DISPLAY");
 

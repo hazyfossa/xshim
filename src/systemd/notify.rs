@@ -1,7 +1,4 @@
-use std::{
-    os::unix::net::{UnixDatagram, UnixStream},
-    path::PathBuf,
-};
+use std::{os::unix::net::UnixDatagram, path::PathBuf};
 
 use anyhow::{Context, Result};
 
