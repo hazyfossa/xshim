@@ -18,10 +18,11 @@ use crate::{
     env_definitions::*,
     frame::environment::{Env, EnvDiff, EnvOs},
     runtime_dir::RuntimeDirManager,
-    systemd::notify::Notifier,
+    systemd::{journald, notify::Notifier},
     utils::{
         fd::{CommandFdCtxExt, FdContext},
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
+        warn::WarnExt,
     },
     xauthority::XAuthorityManager,
 };
@@ -133,14 +134,19 @@ fn main() -> Result<()> {
     let env = EnvOs::new_view();
     let args: Args = argh::from_env();
 
+    // TODO: make this non-fatal, fallback to stderr
+    journald::init_journald().context("Failed to initialize journald client")?;
+
     // TODO: add an unsafe option to try and determine one anyway
     let vt = env.get::<VtNumber>().context("Cannot find a VT number allocated for current session. Are you running this from a correct place?")?;
-    let seat = env.get::<Seat>();
+
+    let seat = env
+        .get::<Seat>()
+        .context("Cannot find a seat for the current session")
+        .warn();
 
     // TODO: is this even relevant?
     let window_path = WindowPath::previous_plus_vt(&env, &vt);
-
-    // TODO: warn on seat empty
 
     let mut notifier = match args.notify {
         true => Some(Notifier::from_env(&env).context("Failed to setup systemd notifications")?),
@@ -161,9 +167,8 @@ fn main() -> Result<()> {
         .setup_server()
         .context("Failed to define server authority")?;
 
-    let (future_display, _xorg_child) =
-        spawn_server(&args.xorg_path, server_authority, vt, seat.ok())
-            .context("Failed to spawn Xorg")?;
+    let (future_display, _xorg_child) = spawn_server(&args.xorg_path, server_authority, vt, seat)
+        .context("Failed to spawn Xorg")?;
 
     let display = future_display.blocking_wait()?;
 
@@ -186,6 +191,7 @@ fn main() -> Result<()> {
     }
 
     // TODO: is there a point in waiting on Xorg? Client should always close if XServer drops, right?
+    // ...will systemd reap the zombie as part of session logout?
 
     client_child
         .wait()

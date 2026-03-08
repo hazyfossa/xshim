@@ -1,14 +1,31 @@
-use std::os::unix::net::UnixDatagram;
+use std::{os::unix::net::UnixDatagram, sync::OnceLock};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use rustix::{
     fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create},
     io::Errno,
 };
 
+static JOURNAL: OnceLock<JournalWriter> = OnceLock::new();
+
 const JOURNALD_PATH: &str = "/run/systemd/journal/socket";
 
+pub fn init_journald() -> Result<()> {
+    let writer = JournalWriter::new()?;
+    JOURNAL
+        .set(writer)
+        .map_err(|_| anyhow!("Already initialized"))
+}
+
+pub fn log(level: LogLevel, message: &str) -> Result<()> {
+    JOURNAL
+        .get()
+        .context("Journald not initialized")?
+        .log(level, message)
+}
+
 #[repr(u8)]
+#[allow(dead_code)]
 pub enum LogLevel {
     Debug = 0,
     Informational,

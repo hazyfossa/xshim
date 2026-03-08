@@ -104,3 +104,33 @@ pub mod subprocess {
         Ok(ChildWithCleanup(child))
     }
 }
+
+pub mod warn {
+    use crate::systemd::journald::{self, LogLevel};
+
+    // TODO: zero-alloc with format_args
+    // note that it may be impossible (journald encoding requires us to check for \n)
+    // which already necessitates some sort of string lookup before we even started writing
+    #[macro_export]
+    macro_rules! warn {
+        ($($tt:tt)?) => {
+            let _ = journald::log(LogLevel::Warning, &format!($($tt)?));
+        };
+    }
+
+    pub trait WarnExt<T> {
+        fn warn(self) -> Option<T>;
+    }
+
+    impl<T> WarnExt<T> for anyhow::Result<T> {
+        fn warn(self) -> Option<T> {
+            match self {
+                Ok(value) => Some(value),
+                Err(e) => {
+                    warn!("{e:?}");
+                    None
+                }
+            }
+        }
+    }
+}
