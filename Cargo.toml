@@ -7,7 +7,6 @@ edition = "2024"
 anyhow = "1.0.102"
 argh = { version = "0.1.16", default-features = false, features = ["help"] }
 binrw = "0.15.1"
-command-fds = "0.3.2"
 rustix = { version = "1.1.4", features = ["fs", "process", "rand", "system"] }
 zeroize = { version = "1.8.2", features = ["derive"] }
 

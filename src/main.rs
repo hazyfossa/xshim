@@ -7,6 +7,7 @@ mod xauthority;
 
 use std::{
     io::{BufRead, BufReader, PipeReader, pipe},
+    os::fd::AsRawFd,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -20,7 +21,7 @@ use crate::{
     runtime_dir::RuntimeDirManager,
     systemd::{journald, notify::Notifier},
     utils::{
-        fd::{CommandFdCtxExt, FdContext},
+        fd::{CommandFdExt, FdContext, SimpleFdContext},
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
         warn::WarnExt,
     },
@@ -33,12 +34,12 @@ const DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 struct DisplayReceiver(PipeReader);
 
 impl DisplayReceiver {
-    fn setup<'a>(fd_ctx: &mut FdContext, command: &'a mut Command) -> Result<Self> {
+    fn setup<'a>(fd_ctx: &mut SimpleFdContext, command: &'a mut Command) -> Result<Self> {
         let (display_rx, display_tx) = pipe().context("Failed to open pipe for display fd")?;
 
         let display_tx_passed = fd_ctx.pass(display_tx.into())?;
 
-        command.args(["-displayfd", &display_tx_passed.num().to_string()]);
+        command.args(["-displayfd", &display_tx_passed.as_raw_fd().to_string()]);
 
         Ok(Self(display_rx))
     }
@@ -70,7 +71,7 @@ fn spawn_server(
     vt: VtNumber,
     seat: Option<Seat>,
 ) -> Result<(DisplayReceiver, ChildWithCleanup)> {
-    let mut fd_ctx = FdContext::new(3..5);
+    let mut fd_ctx = FdContext::new(1);
 
     let mut command = Command::new(path);
 
