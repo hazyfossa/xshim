@@ -68,7 +68,7 @@ macro_rules! _define_env {
     };
 
     ($vis:vis $name:ident ($repr:ty) = parse $key:expr) => {
-        impl crate::frame::environment::EnvironmentParse<std::ffi::OsString> for $name {
+        impl $crate::frame::environment::EnvironmentParse<std::ffi::OsString> for $name {
             fn env_serialize(self) -> std::ffi::OsString { self.0.env_serialize() }
 
             fn env_deserialize(raw: std::ffi::OsString) -> anyhow::Result<Self> {
@@ -82,7 +82,7 @@ macro_rules! _define_env {
     ($vis:vis $name:ident ($repr:ty) = $key:expr) => {
         $vis struct $name($repr);
 
-        impl crate::frame::environment::EnvironmentVariable for $name {
+        impl $crate::frame::environment::EnvironmentVariable for $name {
             const KEY: &str = $key;
         }
 
@@ -191,10 +191,7 @@ impl EnvOs {
 
 impl EnvRaw for EnvOs {
     fn raw_get(&self, key: &str) -> Option<OsString> {
-        match self.append_buf.raw_get(key) {
-            Some(set) => return Some(set),
-            None => sys::var_os(key),
-        }
+        self.append_buf.raw_get(key).or(sys::var_os(key))
     }
 
     fn raw_merge(&mut self, diff: impl EnvDiff) {

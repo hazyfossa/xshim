@@ -19,7 +19,7 @@ impl Display {
 
 impl EnvironmentParse<String> for Display {
     fn env_serialize(self) -> String {
-        format!(":{}", self.0).into()
+        format!(":{}", self.0)
     }
 
     fn env_deserialize(value: String) -> Result<Self> {

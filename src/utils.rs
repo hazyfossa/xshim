@@ -57,10 +57,12 @@ pub mod fd {
 
     impl FdContext<RangeInclusive<RawFd>> {
         pub fn new(capacity: i32) -> Self {
-            let capacity = capacity.checked_add(1).expect(&format!(
-                "overflow: the limit for SimpleFdContext capacity is {}",
-                i32::MAX - 1
-            ));
+            let capacity = capacity.checked_add(1).unwrap_or_else(|| {
+                panic!(
+                    "overflow: the limit for SimpleFdContext capacity is {}",
+                    i32::MAX - 1
+                )
+            });
 
             Self::manual(3..=capacity)
         }
@@ -146,7 +148,7 @@ pub mod fd {
     impl CommandFdExt for Command {
         fn with_fd_context<T: FdSource>(&mut self, mut fd_ctx: FdContext<T>) -> &mut Self {
             // Safety: apply() does not allocate, rustix calls are safe
-            unsafe { self.pre_exec(move || (&mut fd_ctx).apply()) }
+            unsafe { self.pre_exec(move || fd_ctx.apply()) }
         }
     }
 

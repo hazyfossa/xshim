@@ -34,7 +34,7 @@ const DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 struct DisplayReceiver(PipeReader);
 
 impl DisplayReceiver {
-    fn setup<'a>(fd_ctx: &mut SimpleFdContext, command: &'a mut Command) -> Result<Self> {
+    fn setup(fd_ctx: &mut SimpleFdContext, command: &mut Command) -> Result<Self> {
         let (display_rx, display_tx) = pipe().context("Failed to open pipe for display fd")?;
 
         let display_tx_passed = fd_ctx.pass(display_tx.into())?;
@@ -84,7 +84,7 @@ fn spawn_server(
     // and neither does it call logind
 
     command
-        .arg(format!("vt{}", vt.to_string()))
+        .arg(format!("vt{}", *vt))
         .args(["-auth".into(), authority])
         .args(["-nolisten", "tcp"])
         .args(["-background", "none", "-noreset", "-keeptty", "-novtswitch"])

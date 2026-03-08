@@ -110,7 +110,7 @@ impl XAuthorityManager {
 
         xauth_file.set(authority)?;
 
-        Ok(ClientAuthorityEnv(path.into()))
+        Ok(ClientAuthorityEnv(path))
     }
 
     pub fn finish(self) -> RuntimeDir {
