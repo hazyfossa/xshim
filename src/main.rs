@@ -25,7 +25,7 @@ use crate::{
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
         warn::WarnExt,
     },
-    xauthority::XAuthorityManager,
+    xauthority::{ClientAuthorityEnv, XAuthorityManager},
 };
 
 // You may want to change this appropriately if you're making a package
@@ -67,6 +67,7 @@ impl DisplayReceiver {
 
 fn spawn_server(
     path: &Path,
+    extra_args: &Vec<String>,
     authority: PathBuf,
     vt: VtNumber,
     seat: Option<Seat>,
@@ -89,6 +90,7 @@ fn spawn_server(
         .args(["-nolisten", "tcp"])
         .args(["-background", "none", "-noreset", "-keeptty", "-novtswitch"])
         .args(["-verbose", "3", "-logfile", "/dev/null"])
+        .args(extra_args)
         .envs([("XORG_RUN_AS_USER_OK", "1")]); // TODO: relevant?
 
     let display_rx = DisplayReceiver::setup(&mut fd_ctx, &mut command)?;
@@ -100,21 +102,106 @@ fn spawn_server(
     Ok((display_rx, child))
 }
 
+type ClientEnv = (Display, ClientAuthorityEnv, WindowPath);
+
+trait RunMode {
+    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>>;
+}
+
 #[derive(FromArgs)]
+#[argh(subcommand, name = "run")]
+/// Run a client executable.
+struct RunDirect {
+    /// client executable
+    #[argh(positional)]
+    executable: PathBuf,
+}
+
+impl RunMode for RunDirect {
+    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
+        let client_child =
+            spawn_with_cleanup(Command::new(self.executable).envs(x_env.to_env_diff()))
+                .context("Failed to spawn client")?;
+
+        Ok(Some(client_child))
+    }
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "session")]
+/// Run an xdg session. You should also consider running direct mode
+/// from a higher-level session manager.
+struct RunSession {
+    /// xdg session name
+    #[argh(positional)]
+    name: String,
+}
+
+impl RunMode for RunSession {
+    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
+        todo!()
+    }
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "xinit")]
+/// Xinit compatibility mode.
+struct RunXinitCompat {}
+
+impl RunMode for RunXinitCompat {
+    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
+        todo!()
+    }
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand, name = "xorg-delegate")]
+/// Delegate client lifecycle. Called by a cooperative session manager.
+struct RunDelegate {}
+
+impl RunMode for RunDelegate {
+    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
+        todo!()
+    }
+}
+
+#[derive(FromArgs)]
+#[argh(subcommand)]
+enum Mode {
+    Direct(RunDirect),
+    Session(RunSession),
+    XinitCompat(RunXinitCompat),
+    Delegate(RunDelegate),
+}
+
+impl RunMode for Mode {
+    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
+        match self {
+            Self::Direct(x) => x.run(x_env),
+            Self::Session(x) => x.run(x_env),
+            Self::XinitCompat(x) => x.run(x_env),
+            Self::Delegate(x) => x.run(x_env),
+        }
+    }
+}
+
+#[derive(FromArgs)]
+#[rustfmt::skip]
 /// Run Xorg like a wayland session
 struct Args {
-    #[argh(positional)]
-    /// client executable
-    client: PathBuf,
-    #[argh(option, default = "DEFAULT_XORG_PATH.into()")]
     /// override the path used to exec Xorg
-    xorg_path: PathBuf,
-    #[argh(switch)]
+    #[argh(option, default = "DEFAULT_XORG_PATH.into()")] xorg_path: PathBuf,
+    
     /// omit XAuthority locking (use at your own risk!)
-    skip_locks: bool,
-    #[argh(switch)]
+    #[argh(switch)] skip_locks: bool,
+    
     /// use systemd notifications
-    notify: bool,
+    #[argh(switch)] notify: bool,
+
+    #[argh(subcommand)] mode: Mode,
+
+    // arguments passed verbatim to Xorg
+    #[argh(positional)] xorg_args: Vec<String>,
 }
 
 // TODO: display this somewhere
@@ -168,8 +255,9 @@ fn main() -> Result<()> {
         .setup_server()
         .context("Failed to define server authority")?;
 
-    let (future_display, _xorg_child) = spawn_server(&args.xorg_path, server_authority, vt, seat)
-        .context("Failed to spawn Xorg")?;
+    let (future_display, _xorg_child) =
+        spawn_server(&args.xorg_path, &args.xorg_args, server_authority, vt, seat)
+            .context("Failed to spawn Xorg")?;
 
     let display = future_display.blocking_wait()?;
 
@@ -180,10 +268,7 @@ fn main() -> Result<()> {
     // NOTE: RuntimeDir persists until main is closed
     authority_manager.finish();
 
-    let mut client_child = spawn_with_cleanup(
-        Command::new(args.client).envs((display, client_authority, window_path).to_env_diff()),
-    )
-    .context("Failed to spawn client")?;
+    let mut client_child = args.mode.run((display, client_authority, window_path))?;
 
     if let Some(ref mut notifier) = notifier {
         notifier
@@ -193,10 +278,11 @@ fn main() -> Result<()> {
 
     // TODO: is there a point in waiting on Xorg? Client should always close if XServer drops, right?
     // ...will systemd reap the zombie as part of session logout?
-
-    client_child
-        .wait()
-        .context("Error while waiting on client")?;
+    if let Some(ref mut client_child) = client_child {
+        client_child
+            .wait()
+            .context("Error while waiting on client")?;
+    }
 
     if let Some(ref mut notifier) = notifier {
         let _best_effort = notifier.notify_stopping();
