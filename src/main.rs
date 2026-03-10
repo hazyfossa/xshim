@@ -14,6 +14,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use argh::FromArgs;
+use enum_dispatch::enum_dispatch;
 
 use crate::{
     env_definitions::*,
@@ -104,20 +105,21 @@ fn spawn_server(
 
 type ClientEnv = (Display, ClientAuthorityEnv, WindowPath);
 
-trait RunMode {
+#[enum_dispatch]
+trait Mode {
     fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>>;
 }
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "run")]
 /// Run a client executable.
-struct RunDirect {
+struct DirectMode {
     /// client executable
     #[argh(positional)]
     executable: PathBuf,
 }
 
-impl RunMode for RunDirect {
+impl Mode for DirectMode {
     fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
         let client_child =
             spawn_with_cleanup(Command::new(self.executable).envs(x_env.to_env_diff()))
@@ -131,13 +133,13 @@ impl RunMode for RunDirect {
 #[argh(subcommand, name = "session")]
 /// Run an xdg session. You should also consider running direct mode
 /// from a higher-level session manager.
-struct RunSession {
+struct SessionMode {
     /// xdg session name
     #[argh(positional)]
     name: String,
 }
 
-impl RunMode for RunSession {
+impl Mode for SessionMode {
     fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
         todo!()
     }
@@ -146,9 +148,9 @@ impl RunMode for RunSession {
 #[derive(FromArgs)]
 #[argh(subcommand, name = "xinit")]
 /// Xinit compatibility mode.
-struct RunXinitCompat {}
+struct XinitCompatMode {}
 
-impl RunMode for RunXinitCompat {
+impl Mode for XinitCompatMode {
     fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
         todo!()
     }
@@ -157,9 +159,9 @@ impl RunMode for RunXinitCompat {
 #[derive(FromArgs)]
 #[argh(subcommand, name = "xorg-delegate")]
 /// Delegate client lifecycle. Called by a cooperative session manager.
-struct RunDelegate {}
+struct DelegateMode {}
 
-impl RunMode for RunDelegate {
+impl Mode for DelegateMode {
     fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
         todo!()
     }
@@ -167,22 +169,12 @@ impl RunMode for RunDelegate {
 
 #[derive(FromArgs)]
 #[argh(subcommand)]
-enum Mode {
-    Direct(RunDirect),
-    Session(RunSession),
-    XinitCompat(RunXinitCompat),
-    Delegate(RunDelegate),
-}
-
-impl RunMode for Mode {
-    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
-        match self {
-            Self::Direct(x) => x.run(x_env),
-            Self::Session(x) => x.run(x_env),
-            Self::XinitCompat(x) => x.run(x_env),
-            Self::Delegate(x) => x.run(x_env),
-        }
-    }
+#[enum_dispatch(Mode)]
+enum ModeSubcommand {
+    Direct(DirectMode),
+    Session(SessionMode),
+    XinitCompat(XinitCompatMode),
+    Delegate(DelegateMode),
 }
 
 #[derive(FromArgs)]
@@ -198,7 +190,7 @@ struct Args {
     /// use systemd notifications
     #[argh(switch)] notify: bool,
 
-    #[argh(subcommand)] mode: Mode,
+    #[argh(subcommand)] mode: ModeSubcommand,
 
     // arguments passed verbatim to Xorg
     #[argh(positional)] xorg_args: Vec<String>,
