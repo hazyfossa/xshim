@@ -1,10 +1,11 @@
 use std::{os::unix::net::UnixDatagram, sync::OnceLock};
 
-use anyhow::{Context, Result, anyhow, bail};
 use rustix::{
     fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create},
     io::Errno,
 };
+
+use crate::error::*;
 
 static JOURNAL: OnceLock<JournalWriter> = OnceLock::new();
 
@@ -12,15 +13,13 @@ const JOURNALD_PATH: &str = "/run/systemd/journal/socket";
 
 pub fn init_journald() -> Result<()> {
     let writer = JournalWriter::new()?;
-    JOURNAL
-        .set(writer)
-        .map_err(|_| anyhow!("Already initialized"))
+    JOURNAL.set(writer).ok().ctx("Already initialized")
 }
 
 pub fn log(level: LogLevel, message: &str) -> Result<()> {
     JOURNAL
         .get()
-        .context("Journald not initialized")?
+        .ctx("Journald not initialized")?
         .log(level, message)
 }
 
@@ -66,10 +65,10 @@ pub struct JournalWriter {
 
 impl JournalWriter {
     pub fn new() -> Result<Self> {
-        let socket = UnixDatagram::unbound().context("Cannot open a datagram socket")?;
+        let socket = UnixDatagram::unbound().ctx("Cannot open a datagram socket")?;
         socket
             .connect(JOURNALD_PATH)
-            .context("Cannot connect to notifier socket")?;
+            .ctx("Cannot connect to notifier socket")?;
 
         Ok(Self { socket })
     }
@@ -80,9 +79,9 @@ impl JournalWriter {
 
             Err(e) if Errno::from_io_error(&e) == Some(Errno::MSGSIZE) => self
                 .send_large(payload)
-                .context("Failed to transmit large payload"),
+                .ctx("Failed to transmit large payload"),
 
-            Err(other) => bail!(other),
+            Err(other) => whatever!("socket error: {}", other),
         }
     }
 
@@ -91,9 +90,9 @@ impl JournalWriter {
             "journald-large-payload-carrier",
             MemfdFlags::ALLOW_SEALING | MemfdFlags::CLOEXEC,
         )
-        .context("Failed to create memfd")?;
+        .ctx("Failed to create memfd")?;
 
-        fcntl_add_seals(fd, SealFlags::all()).context("Failed to seal memfd")?;
+        fcntl_add_seals(fd, SealFlags::all()).ctx("Failed to seal memfd")?;
 
         // TODO: send fd
         todo!()

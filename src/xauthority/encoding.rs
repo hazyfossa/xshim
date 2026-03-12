@@ -2,8 +2,6 @@ pub use binrw::BinWrite;
 use binrw::binrw;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-pub type Result<T> = std::result::Result<T, binrw::Error>;
-
 #[binrw]
 #[brw(repr(u16))]
 #[derive(Zeroize)]
@@ -18,7 +16,7 @@ pub enum Family {
 
 pub type Hostname = Vec<u8>;
 
-fn bound_len<B: TryFrom<usize>, T>(value: &T, field: &str) -> Result<B> {
+fn bound_len<B: TryFrom<usize>, T>(value: &T, field: &str) -> Result<B, binrw::Error> {
     size_of_val(value)
         .try_into()
         .map_err(|_| binrw::Error::Custom {

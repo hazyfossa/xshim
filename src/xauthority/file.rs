@@ -1,4 +1,4 @@
-use super::encoding::{self, BinWrite, Entry};
+use super::encoding::{BinWrite, Entry};
 
 use std::{
     fs::{File, OpenOptions},
@@ -8,6 +8,8 @@ use std::{
 };
 
 use lock::Lock;
+
+use crate::error::*;
 
 pub struct AuthorityFile {
     file: File,
@@ -41,9 +43,11 @@ impl AuthorityFile {
         Ok(Self { file, _lock: None })
     }
 
-    pub fn set(&mut self, authority: impl IntoIterator<Item = Entry>) -> encoding::Result<()> {
+    pub fn set(&mut self, authority: impl IntoIterator<Item = Entry>) -> Result<()> {
         for entry in authority {
-            entry.write(&mut self.file)?
+            entry
+                .write(&mut self.file)
+                .ctx("Failed to write into XAuthority file")?
         }
 
         Ok(())

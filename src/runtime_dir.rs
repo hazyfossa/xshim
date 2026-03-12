@@ -5,9 +5,10 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{Context, Result, bail};
+use envy::{Env, define_env};
+use snafu::whatever;
 
-use crate::frame::environment::{Env, define_env};
+use crate::error::*;
 
 pub struct RuntimeDir {
     pub path: PathBuf,
@@ -32,22 +33,24 @@ pub struct RuntimeDirManager {
     path: PathBuf,
 }
 
-define_env!(pub RuntimeDirEnv(PathBuf) = parse "XDG_RUNTIME_DIR");
+define_env!(pub RuntimeDirEnv(PathBuf) = raw "XDG_RUNTIME_DIR");
 
 impl RuntimeDirManager {
     pub fn from_env(env: &impl Env) -> Result<Self> {
         let path = env
             .get::<RuntimeDirEnv>()
-            .context("Environment does not provide a runtime directory")?
+            .ctx("Environment does not provide a runtime directory")?
             .0;
 
         let permissions = fs::metadata(&path)
-            .context("Cannot query runtime dir metadata. Does it exist?")?
+            .ctx("Cannot query runtime dir metadata. Does it exist?")?
             .permissions()
             .mode();
 
         if permissions & 0o077 != 0 {
-            bail!("Runtime directory is insecure: expecting permissions `077`, got {permissions}")
+            whatever!(
+                "Runtime directory is insecure: expecting permissions `077`, got {permissions}"
+            )
         };
 
         Ok(Self { path })
@@ -59,7 +62,7 @@ impl RuntimeDirManager {
         DirBuilder::new()
             .mode(0o700)
             .create(&directory)
-            .context(format!("cannot create path: {directory:?}"))?;
+            .ctx(format!("cannot create path: {directory:?}"))?;
 
         Ok(RuntimeDir { path: directory })
     }

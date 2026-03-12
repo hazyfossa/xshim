@@ -1,11 +1,10 @@
-use anyhow::{Result, anyhow};
+use envy::{Env, define_env, parse::EnvironmentParse};
+use snafu::{OptionExt, ResultExt};
 
-use crate::frame::environment::{Env, EnvironmentParse, define_env};
+define_env!(pub Seat(String) = "XDG_SEAT");
+define_env!(pub VtNumber(u8) = "XDG_VTNR");
 
-define_env!(pub Seat(String) = parse "XDG_SEAT");
-define_env!(pub VtNumber(u8) = auto parse "XDG_VTNR");
-
-define_env!(pub Display(u8) = "DISPLAY");
+define_env!(pub Display(u8) = custom "DISPLAY");
 
 impl Display {
     pub fn from_number(n: u8) -> Self {
@@ -18,21 +17,26 @@ impl Display {
 }
 
 impl EnvironmentParse<String> for Display {
+    type Error = snafu::Whatever;
+
     fn env_serialize(self) -> String {
         format!(":{}", self.0)
     }
 
-    fn env_deserialize(value: String) -> Result<Self> {
+    fn env_deserialize(value: String) -> Result<Self, Self::Error> {
+        let value = value
+            .strip_prefix(":")
+            .whatever_context("display should start with :")?;
+
         Ok(Self(
             value
-                .strip_prefix(":")
-                .ok_or(anyhow!("display should start with :"))?
-                .parse()?,
+                .parse()
+                .whatever_context("display should be an integer")?,
         ))
     }
 }
 
-define_env!(pub WindowPath(String) = parse "WINDOWPATH");
+define_env!(pub WindowPath(String) = "WINDOWPATH");
 
 impl WindowPath {
     pub fn previous_plus_vt(env: &impl Env, vt: &VtNumber) -> Self {

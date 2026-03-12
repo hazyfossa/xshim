@@ -9,19 +9,21 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use crate::error::*;
+
+use envy::define_env;
 use rustix::{
     rand::{GetRandomFlags, getrandom},
     system::uname,
 };
 
-use crate::{Display, frame::environment::define_env, runtime_dir::RuntimeDir};
+use crate::{Display, runtime_dir::RuntimeDir};
 
-define_env!(pub ClientAuthorityEnv(PathBuf) = parse "XAUTHORITY");
+define_env!(pub ClientAuthorityEnv(PathBuf) = raw "XAUTHORITY");
 
 fn make_cookie() -> Result<Cookie> {
     let mut cookie_buf = [0u8; Cookie::BYTES_LEN];
-    getrandom(&mut cookie_buf, GetRandomFlags::empty()).context("getrandom() failed")?;
+    getrandom(&mut cookie_buf, GetRandomFlags::empty()).ctx("getrandom() failed")?;
     Ok(Cookie::new(cookie_buf))
 }
 
@@ -74,7 +76,7 @@ impl XAuthorityManager {
 
         let mut xauth_file = self
             .create_auth_file(&path)
-            .context(format!("Failed to create {path:?}"))?;
+            .ctx(format!("Failed to create {path:?}"))?;
 
         xauth_file.set(authority)?;
 
@@ -106,7 +108,7 @@ impl XAuthorityManager {
 
         let mut xauth_file = self
             .create_auth_file(&path)
-            .context(format!("Failed to create {path:?}"))?;
+            .ctx(format!("Failed to create {path:?}"))?;
 
         xauth_file.set(authority)?;
 

@@ -1,5 +1,5 @@
 mod env_definitions;
-mod frame;
+mod error;
 mod runtime_dir;
 mod systemd;
 mod utils;
@@ -12,19 +12,18 @@ use std::{
     process::Command,
 };
 
-use anyhow::{Context, Result, bail};
 use argh::FromArgs;
 use enum_dispatch::enum_dispatch;
+use envy::{Env, container::EnvOs, diff::Diff};
 
 use crate::{
     env_definitions::*,
-    frame::environment::{Env, EnvDiff, EnvOs},
+    error::*,
     runtime_dir::RuntimeDirManager,
     systemd::{journald, notify::Notifier},
     utils::{
         fd::{CommandFdExt, FdContext, SimpleFdContext},
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
-        warn::WarnExt,
     },
     xauthority::{ClientAuthorityEnv, XAuthorityManager},
 };
@@ -36,7 +35,7 @@ struct DisplayReceiver(PipeReader);
 
 impl DisplayReceiver {
     fn setup(fd_ctx: &mut SimpleFdContext, command: &mut Command) -> Result<Self> {
-        let (display_rx, display_tx) = pipe().context("Failed to open pipe for display fd")?;
+        let (display_rx, display_tx) = pipe().ctx("Failed to open pipe for display fd")?;
 
         let display_tx_passed = fd_ctx.pass(display_tx.into())?;
 
@@ -51,16 +50,16 @@ impl DisplayReceiver {
 
         reader
             .read_line(&mut display_buf)
-            .context("Failed to read display number")?;
+            .ctx("Failed to read display number")?;
 
         if display_buf.is_empty() {
-            bail!("Internal Xorg error. See logs above for details.")
+            whatever!("Internal Xorg error. See logs above for details.")
         }
 
         let display_number = display_buf
             .trim_end()
             .parse()
-            .context("Xorg provided invalid display number")?;
+            .ctx("Xorg provided invalid display number")?;
 
         Ok(Display::from_number(display_number))
     }
@@ -98,7 +97,7 @@ fn spawn_server(
     command.with_fd_context(fd_ctx);
 
     // TODO: proxy logs
-    let child = spawn_with_cleanup(&mut command).context("Failed to spawn Xorg")?;
+    let child = spawn_with_cleanup(&mut command).ctx("Failed to spawn Xorg")?;
 
     Ok((display_rx, child))
 }
@@ -123,7 +122,7 @@ impl Mode for DirectMode {
     fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
         let client_child =
             spawn_with_cleanup(Command::new(self.executable).envs(x_env.to_env_diff()))
-                .context("Failed to spawn client")?;
+                .ctx("Failed to spawn client")?;
 
         Ok(Some(client_child))
     }
@@ -215,47 +214,47 @@ fn main() -> Result<()> {
     let args: Args = argh::from_env();
 
     // TODO: make this non-fatal, fallback to stderr
-    journald::init_journald().context("Failed to initialize journald client")?;
+    journald::init_journald().ctx("Failed to initialize journald client")?;
 
     // TODO: add an unsafe option to try and determine one anyway
-    let vt = env.get::<VtNumber>().context("Cannot find a VT number allocated for current session. Are you running this from a correct place?")?;
+    let vt = env.get::<VtNumber>().ctx("Cannot find a VT number allocated for current session. Are you running this from a correct place?")?;
 
     let seat = env
         .get::<Seat>()
-        .context("Cannot find a seat for the current session")
+        .ctx("Cannot find a seat for the current session")
         .warn();
 
     // TODO: is this even relevant?
     let window_path = WindowPath::previous_plus_vt(&env, &vt);
 
     let mut notifier = match args.notify {
-        true => Some(Notifier::from_env(&env).context("Failed to setup systemd notifications")?),
+        true => Some(Notifier::from_env(&env).ctx("Failed to setup systemd notifications")?),
         false => None,
     };
 
     let rt_dir_manager =
-        RuntimeDirManager::from_env(&env).context("Cannot setup runtime dir manager")?;
+        RuntimeDirManager::from_env(&env).ctx("Cannot setup runtime dir manager")?;
 
     let runtime_dir = rt_dir_manager
         .create(&format!("xshim-{}", *vt))
-        .context("Failed to create runtime directory")?;
+        .ctx("Failed to create runtime directory")?;
 
     let authority_manager = XAuthorityManager::new(runtime_dir, args.skip_locks)
-        .context("Cannot setup XAuthority manager")?;
+        .ctx("Cannot setup XAuthority manager")?;
 
     let server_authority = authority_manager
         .setup_server()
-        .context("Failed to define server authority")?;
+        .ctx("Failed to define server authority")?;
 
     let (future_display, _xorg_child) =
         spawn_server(&args.xorg_path, &args.xorg_args, server_authority, vt, seat)
-            .context("Failed to spawn Xorg")?;
+            .ctx("Failed to spawn Xorg")?;
 
     let display = future_display.blocking_wait()?;
 
     let client_authority = authority_manager
         .setup_client(&display)
-        .context("failed to define client authority")?;
+        .ctx("failed to define client authority")?;
 
     // NOTE: RuntimeDir persists until main is closed
     authority_manager.finish();
@@ -263,17 +262,13 @@ fn main() -> Result<()> {
     let mut client_child = args.mode.run((display, client_authority, window_path))?;
 
     if let Some(ref mut notifier) = notifier {
-        notifier
-            .notify_ready()
-            .context("Failed to signal readiness")?;
+        notifier.notify_ready().ctx("Failed to signal readiness")?;
     }
 
     // TODO: is there a point in waiting on Xorg? Client should always close if XServer drops, right?
     // ...will systemd reap the zombie as part of session logout?
     if let Some(ref mut client_child) = client_child {
-        client_child
-            .wait()
-            .context("Error while waiting on client")?;
+        client_child.wait().ctx("Error while waiting on client")?;
     }
 
     if let Some(ref mut notifier) = notifier {
