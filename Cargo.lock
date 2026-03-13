@@ -93,7 +93,7 @@ dependencies = [
 [[package]]
 name = "envy"
 version = "0.1.0"
-source = "git+https://github.com/hazyfossa/envy.git#6a4d312d0c8de7114c51e548330520d06105a300"
+source = "git+https://github.com/hazyfossa/envy.git#5d7f165442c1456d13448e8ba2cfbd568721ef65"
 dependencies = [
  "snafu",
 ]

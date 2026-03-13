@@ -216,3 +216,24 @@ pub mod subprocess {
         Ok(ChildWithCleanup(child))
     }
 }
+
+pub mod path {
+    use std::path::Path;
+
+    use crate::error::*;
+
+    pub trait EnsureExistsExt: Sized {
+        fn ensure_exists(self) -> Result<Self>;
+    }
+
+    impl<T> EnsureExistsExt for T
+    where
+        T: AsRef<Path>,
+    {
+        fn ensure_exists(self) -> Result<Self> {
+            let this = self.as_ref();
+            snafu::ensure_whatever!(this.exists(), "the path {} does not exist", this.display());
+            Ok(self)
+        }
+    }
+}

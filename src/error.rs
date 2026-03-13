@@ -38,15 +38,13 @@ impl<T, E, All: snafu::ResultExt<T, E>> ResultCtx<T, E> for All {}
 //
 
 pub mod warn {
-    use crate::systemd::journald::{self, LogLevel};
-
     // TODO: zero-alloc with format_args
     // note that it may be impossible (journald encoding requires us to check for \n)
     // which already necessitates some sort of string lookup before we even started writing
     #[macro_export]
     macro_rules! warn {
         ($($tt:tt)?) => {
-            let _ = journald::log(LogLevel::Warning, &format!($($tt)?));
+            let _ = crate::systemd::journald::log(crate::systemd::journald::LogLevel::Warning, &format!($($tt)?));
         };
     }
 

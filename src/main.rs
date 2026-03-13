@@ -6,6 +6,7 @@ mod utils;
 mod xauthority;
 
 use std::{
+    env::home_dir,
     io::{BufRead, BufReader, PipeReader, pipe},
     os::fd::AsRawFd,
     path::{Path, PathBuf},
@@ -14,7 +15,7 @@ use std::{
 
 use argh::FromArgs;
 use enum_dispatch::enum_dispatch;
-use envy::{Env, container::EnvOs, diff::Diff};
+use envy::{Env, container::EnvOs, define_env, diff::Diff};
 
 use crate::{
     env_definitions::*,
@@ -23,6 +24,7 @@ use crate::{
     systemd::{journald, notify::Notifier},
     utils::{
         fd::{CommandFdExt, FdContext, SimpleFdContext},
+        path::EnsureExistsExt,
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
     },
     xauthority::{ClientAuthorityEnv, XAuthorityManager},
@@ -149,9 +151,38 @@ impl Mode for SessionMode {
 /// Xinit compatibility mode.
 struct XinitCompatMode {}
 
+// TODO: support XSERVERRC? Requires changes to mode trait
+define_env!(pub XinitRC(PathBuf) = raw "XINITRC");
+
 impl Mode for XinitCompatMode {
     fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
-        todo!()
+        let rc_env = EnvOs::new_view().get::<XinitRC>().map(|var| var.0);
+
+        let rc_user = || {
+            home_dir()
+                .ctx("cannot find the user home directory")?
+                .join(".xinitrc")
+                .ensure_exists()
+        };
+
+        let rc_system = || PathBuf::from("/etc/X11/xinit/xinitrc").ensure_exists();
+
+        let default_client = || {
+            warn!("Cannot find xinit RC, using default client.");
+            let mut cmd = Command::new("xterm");
+            cmd.args(["-geometry", "+1+1", "-n", "login"]);
+            cmd
+        };
+
+        let mut client = rc_env
+            .or_else(|_| rc_user())
+            .or_else(|_| rc_system())
+            .map_or_else(|_| default_client(), |rc| Command::new(rc));
+
+        let client = spawn_with_cleanup(client.envs(x_env.to_env_diff()))
+            .ctx("Failed to spawn xinit RC subprocess")?;
+
+        Ok(Some(client))
     }
 }
 
@@ -206,8 +237,6 @@ fn _help_skip_locks() {
     Use at your own risk!"
     )
 }
-
-// TODO: xinit compat mode
 
 fn main() -> Result<()> {
     let env = EnvOs::new_view();
