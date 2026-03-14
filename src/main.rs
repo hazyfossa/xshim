@@ -7,15 +7,25 @@ mod xauthority;
 
 use std::{
     env::home_dir,
+    ffi::OsStr,
     io::{BufRead, BufReader, PipeReader, pipe},
-    os::fd::AsRawFd,
+    os::{
+        fd::AsRawFd,
+        unix::{ffi::OsStrExt, net::UnixDatagram},
+    },
     path::{Path, PathBuf},
     process::Command,
 };
 
 use argh::FromArgs;
 use enum_dispatch::enum_dispatch;
-use envy::{Env, container::EnvOs, define_env, diff::Diff};
+use envy::{
+    Env,
+    container::EnvOs,
+    define_env,
+    diff::{Diff, EnvVecExt},
+};
+use snafu::ResultExt;
 
 use crate::{
     env_definitions::*,
@@ -142,7 +152,7 @@ struct SessionMode {
 
 impl Mode for SessionMode {
     fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
-        todo!()
+        todo!("session mode not implemented")
     }
 }
 
@@ -189,11 +199,38 @@ impl Mode for XinitCompatMode {
 #[derive(FromArgs)]
 #[argh(subcommand, name = "xorg-delegate")]
 /// Delegate client lifecycle. Called by a cooperative session manager.
-struct DelegateMode {}
+struct DelegateMode {
+    #[argh(switch)]
+    /// use systemd socket activation
+    systemd: bool,
+    #[argh(option)]
+    /// use socket on path
+    path: Option<PathBuf>,
+}
 
 impl Mode for DelegateMode {
     fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
-        todo!()
+        if self.systemd && self.path.is_some() {
+            whatever!("Conflicting options: specify either --systemd or --path, not both.")
+        };
+
+        let socket = match self.systemd {
+            // Safety: by setting --systemd the user guarantees the .socket unit to be a datagram socket
+            true => unsafe {
+                systemd::socket_activation::listen_fd_simple()
+                    .ctx("Failed to receive a socket from systemd")?
+            },
+            false => {
+                let path = self.path.ctx("Socket path not specified")?;
+                UnixDatagram::bind(&path).ctx(format!("Cannot bind to socket at {path:?}"))?
+            }
+        };
+
+        socket
+            .send(x_env.to_vec().join(OsStr::new(";")).as_bytes())
+            .ctx("Failed to send environment data")?;
+
+        Ok(None)
     }
 }
 
