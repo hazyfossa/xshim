@@ -1,14 +1,11 @@
 use std::{
     num::NonZeroI32,
-    os::{
-        fd::{FromRawFd, RawFd},
-        unix::net::{UnixDatagram, UnixStream},
-    },
+    os::fd::{FromRawFd, RawFd},
 };
 
 use envy::{Env, container::EnvOs, define_env};
 use rustix::process;
-use snafu::{Snafu, ensure, whatever};
+use snafu::{Snafu, ensure};
 
 use crate::error::*;
 
@@ -39,7 +36,7 @@ fn listen_fds() -> Result<Vec<RawFd>, SocketActivationError> {
     let listen_fds_len = env.get::<ListenFDs>()?.0;
 
     Ok((SD_LISTEN_FDS_START..=listen_fds_len)
-        .map(|n| RawFd::from(n))
+        .map(RawFd::from)
         .collect())
 }
 

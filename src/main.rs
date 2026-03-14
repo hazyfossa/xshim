@@ -186,7 +186,7 @@ impl Mode for XinitCompatMode {
         let mut client = rc_env
             .or_else(|_| rc_user())
             .or_else(|_| rc_system())
-            .map_or_else(|_| default_client(), |rc| Command::new(rc));
+            .map_or_else(|_| default_client(), Command::new);
 
         let client = spawn_with_cleanup(client.envs(x_env.to_env_diff()))
             .ctx("Failed to spawn xinit RC subprocess")?;

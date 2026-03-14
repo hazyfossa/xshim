@@ -94,7 +94,7 @@ pub mod fd {
 
             self.mappings.push(FdMapping {
                 parent_fd: fd,
-                child_fd: mapped_fd as i32,
+                child_fd: mapped_fd,
             });
             Ok(PassedFd(mapped_fd))
         }
@@ -242,7 +242,7 @@ pub mod send_fds {
     use std::{
         io::IoSlice,
         os::{
-            fd::{AsFd, BorrowedFd, OwnedFd},
+            fd::{AsFd, BorrowedFd},
             unix::net::{UnixDatagram, UnixStream},
         },
     };
