@@ -25,7 +25,6 @@ use envy::{
     define_env,
     diff::{Diff, EnvVecExt},
 };
-use snafu::ResultExt;
 
 use crate::{
     env_definitions::*,

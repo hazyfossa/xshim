@@ -237,3 +237,34 @@ pub mod path {
         }
     }
 }
+
+pub mod send_fds {
+    use std::{
+        io::IoSlice,
+        os::{
+            fd::{AsFd, BorrowedFd, OwnedFd},
+            unix::net::{UnixDatagram, UnixStream},
+        },
+    };
+
+    use rustix::{
+        io,
+        net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg},
+    };
+
+    pub trait SendFds: AsFd {
+        // TODO: is it sensible to restrict to Owned?
+        fn send_fds(&self, fds: &[BorrowedFd]) -> io::Result<usize> {
+            let mut anc = SendAncillaryBuffer::new(&mut []);
+            anc.push(SendAncillaryMessage::ScmRights(fds));
+
+            // Send a single null byte, as a true empty message won't be processed by peer
+            let empty = IoSlice::new(b"\0");
+
+            sendmsg(self.as_fd(), &[empty], &mut anc, SendFlags::empty())
+        }
+    }
+
+    impl SendFds for UnixDatagram {}
+    impl SendFds for UnixStream {}
+}

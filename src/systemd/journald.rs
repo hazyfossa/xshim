@@ -1,11 +1,14 @@
-use std::{os::unix::net::UnixDatagram, sync::OnceLock};
+use std::{
+    os::{fd::AsFd, unix::net::UnixDatagram},
+    sync::OnceLock,
+};
 
 use rustix::{
     fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create},
-    io::Errno,
+    io::{self, Errno},
 };
 
-use crate::error::*;
+use crate::{error::*, utils::send_fds::SendFds};
 
 static JOURNAL: OnceLock<JournalWriter> = OnceLock::new();
 
@@ -92,10 +95,15 @@ impl JournalWriter {
         )
         .ctx("Failed to create memfd")?;
 
-        fcntl_add_seals(fd, SealFlags::all()).ctx("Failed to seal memfd")?;
+        io::write(&fd, payload).ctx("Failed to write payload to memfd")?;
 
-        // TODO: send fd
-        todo!()
+        fcntl_add_seals(&fd, SealFlags::all()).ctx("Failed to seal memfd")?;
+
+        self.socket
+            .send_fds(&[fd.as_fd()])
+            .ctx("Failed to send fd on socket")?;
+
+        Ok(())
     }
 
     pub fn log(&self, level: LogLevel, message: &str) -> Result<()> {
