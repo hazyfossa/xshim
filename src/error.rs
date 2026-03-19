@@ -44,7 +44,10 @@ pub mod warn {
     #[macro_export]
     macro_rules! warn {
         ($($tt:tt)?) => {
-            let _ = $crate::systemd::journald::log(crate::systemd::journald::LogLevel::Warning, &format!($($tt)?));
+            let _ = $crate::systemd::journald::log($
+                crate::systemd::journald::LogLevel::Warning,
+                &format!($($tt)?)
+            );
         };
     }
 

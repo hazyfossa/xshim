@@ -108,7 +108,7 @@ fn spawn_server(
     command.with_fd_context(fd_ctx);
 
     // TODO: proxy logs
-    let child = spawn_with_cleanup(&mut command).ctx("Failed to spawn Xorg")?;
+    let child = spawn_with_cleanup(command).ctx("Failed to spawn Xorg")?;
 
     Ok((display_rx, child))
 }
@@ -131,9 +131,10 @@ struct DirectMode {
 
 impl Mode for DirectMode {
     fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
-        let client_child =
-            spawn_with_cleanup(Command::new(self.executable).envs(x_env.to_env_diff()))
-                .ctx("Failed to spawn client")?;
+        let mut command = Command::new(self.executable);
+        command.envs(x_env.to_env_diff());
+
+        let client_child = spawn_with_cleanup(command).ctx("Failed to spawn client")?;
 
         Ok(Some(client_child))
     }
@@ -186,10 +187,19 @@ impl Mode for XinitCompatMode {
         let mut client = rc_env
             .or_else(|_| rc_user())
             .or_else(|_| rc_system())
-            .map_or_else(|_| default_client(), Command::new);
+            .map_or_else(
+                |_| {
+                    warn!("Using xterm as a fallback client");
+                    default_client()
+                },
+                Command::new,
+            );
 
-        let client = spawn_with_cleanup(client.envs(x_env.to_env_diff()))
-            .ctx("Failed to spawn xinit RC subprocess")?;
+        client.envs(x_env.to_env_diff());
+
+        let client = spawn_with_cleanup(client).ctx("Failed to spawn xinit RC subprocess")?;
+
+        // TODO: retry with shell
 
         Ok(Some(client))
     }

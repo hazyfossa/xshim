@@ -204,7 +204,7 @@ pub mod subprocess {
         }
     }
 
-    pub fn spawn_with_cleanup(command: &mut Command) -> Result<ChildWithCleanup, io::Error> {
+    pub fn spawn_with_cleanup(mut command: Command) -> Result<ChildWithCleanup, io::Error> {
         // Safety: does not allocate, rustix call is safe
         let command = unsafe {
             command.pre_exec(|| {

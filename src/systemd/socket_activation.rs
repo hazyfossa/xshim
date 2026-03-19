@@ -40,6 +40,9 @@ fn listen_fds() -> Result<Vec<RawFd>, SocketActivationError> {
         .collect())
 }
 
+/// Safety: this function will cast an FD to a rust socket type
+/// The caller must ensure systemd provides a socket of a correct type
+// TODO: check socket type at runtime?
 pub unsafe fn listen_fd_simple<T: FromRawFd>() -> Result<T, SocketActivationError> {
     let fds = listen_fds()?;
 
