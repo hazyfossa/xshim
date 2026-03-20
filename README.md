@@ -15,7 +15,6 @@ One thing XShim can never polyfill is the logind session type, that is by design
 
 # todo
 - [ ] Examples of use
-- [ ] Xinit compatibility mode
-- [ ] Multi-seat support
-- [ ] Better systemd integration
+- [+] Xinit compatibility mode
+- [+] Better systemd integration
 - [ ] Parsing of Xorg logs into journald format
