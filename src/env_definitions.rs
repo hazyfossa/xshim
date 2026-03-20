@@ -4,7 +4,7 @@ use snafu::{OptionExt, ResultExt};
 define_env!(pub Seat(String) = "XDG_SEAT");
 define_env!(pub VtNumber(u8) = "XDG_VTNR");
 
-define_env!(pub Display(u8) = custom "DISPLAY");
+define_env!(pub Display(u8) = #custom "DISPLAY");
 
 impl Display {
     pub fn from_number(n: u8) -> Self {

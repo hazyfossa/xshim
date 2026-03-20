@@ -21,7 +21,7 @@ use argh::FromArgs;
 use enum_dispatch::enum_dispatch;
 use envy::{
     Env,
-    container::EnvOs,
+    container::OsEnv,
     define_env,
     diff::{Diff, EnvVecExt},
 };
@@ -162,11 +162,11 @@ impl Mode for SessionMode {
 struct XinitCompatMode {}
 
 // TODO: support XSERVERRC? Requires changes to mode trait
-define_env!(pub XinitRC(PathBuf) = raw "XINITRC");
+define_env!(pub XinitRC(PathBuf) = #raw "XINITRC");
 
 impl Mode for XinitCompatMode {
     fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
-        let rc_env = EnvOs::new_view().get::<XinitRC>().map(|var| var.0);
+        let rc_env = OsEnv::new_view().get::<XinitRC>().map(|var| var.0);
 
         let rc_user = || {
             home_dir()
@@ -285,7 +285,7 @@ fn _help_skip_locks() {
 }
 
 fn main() -> Result<()> {
-    let env = EnvOs::new_view();
+    let env = OsEnv::new_view();
     let args: Args = argh::from_env();
 
     // TODO: make this non-fatal, fallback to stderr

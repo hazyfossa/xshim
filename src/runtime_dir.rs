@@ -33,7 +33,7 @@ pub struct RuntimeDirManager {
     path: PathBuf,
 }
 
-define_env!(pub RuntimeDirEnv(PathBuf) = raw "XDG_RUNTIME_DIR");
+define_env!(pub RuntimeDirEnv(PathBuf) = #raw "XDG_RUNTIME_DIR");
 
 impl RuntimeDirManager {
     pub fn from_env(env: &impl Env) -> Result<Self> {

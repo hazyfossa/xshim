@@ -7,7 +7,7 @@ pub struct Notifier {
     socket: UnixDatagram,
 }
 
-define_env!(NotifySocket(PathBuf) = raw "NOTIFY_SOCKET");
+define_env!(NotifySocket(PathBuf) = #raw "NOTIFY_SOCKET");
 
 impl Notifier {
     pub fn from_env(env: &impl Env) -> Result<Self> {

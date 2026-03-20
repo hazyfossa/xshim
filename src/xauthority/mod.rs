@@ -19,7 +19,7 @@ use rustix::{
 
 use crate::{Display, runtime_dir::RuntimeDir};
 
-define_env!(pub ClientAuthorityEnv(PathBuf) = raw "XAUTHORITY");
+define_env!(pub ClientAuthorityEnv(PathBuf) = #raw "XAUTHORITY");
 
 fn make_cookie() -> Result<Cookie> {
     let mut cookie_buf = [0u8; Cookie::BYTES_LEN];

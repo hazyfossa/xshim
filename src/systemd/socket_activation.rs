@@ -3,7 +3,7 @@ use std::{
     os::fd::{FromRawFd, RawFd},
 };
 
-use envy::{Env, container::EnvOs, define_env};
+use envy::{Env, container::OsEnv, define_env};
 use rustix::process;
 use snafu::{Snafu, ensure};
 
@@ -26,7 +26,7 @@ pub enum SocketActivationError {
 
 // TODO: unset from passed env view?
 fn listen_fds() -> Result<Vec<RawFd>, SocketActivationError> {
-    let env = EnvOs::new_view();
+    let env = OsEnv::new_view();
 
     ensure!(
         env.get::<ListenPID>()?.0 == process::getpid().as_raw_nonzero(),
