@@ -8,13 +8,13 @@ mod xauthority;
 use std::{
     env::home_dir,
     ffi::OsStr,
-    io::{BufRead, BufReader, PipeReader, pipe},
+    io::{self, BufRead, BufReader, ErrorKind, PipeReader, pipe},
     os::{
         fd::AsRawFd,
         unix::{ffi::OsStrExt, net::UnixDatagram},
     },
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, ExitStatus},
 };
 
 use argh::FromArgs;
@@ -115,9 +115,34 @@ fn spawn_server(
 
 type ClientEnv = (Display, ClientAuthorityEnv, WindowPath);
 
+enum Client {
+    Command(Command),
+    Process(Result<ChildWithCleanup, io::Error>),
+    None,
+}
+
+impl Client {
+    fn bind(self) -> Result<ExitStatus> {
+        match self {
+            // if provided a command, spawn a process
+            Client::Command(command) => {
+                let process = spawn_with_cleanup(command);
+                Self::Process(process).bind()
+            }
+            // if provided a process, wait on in
+            Client::Process(process) => Ok(process
+                .ctx("Failed to spawn client subprocess")?
+                .wait()
+                .unwrap()),
+            // if not dealing with processes, return successs
+            Client::None => Ok(ExitStatus::default()),
+        }
+    }
+}
+
 #[enum_dispatch]
 trait Mode {
-    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>>;
+    fn run(self, x_env: ClientEnv) -> Result<Client>;
 }
 
 #[derive(FromArgs)]
@@ -130,13 +155,11 @@ struct DirectMode {
 }
 
 impl Mode for DirectMode {
-    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
+    fn run(self, x_env: ClientEnv) -> Result<Client> {
         let mut command = Command::new(self.executable);
         command.envs(x_env.to_env_diff());
 
-        let client_child = spawn_with_cleanup(command).ctx("Failed to spawn client")?;
-
-        Ok(Some(client_child))
+        Ok(Client::Command(command))
     }
 }
 
@@ -151,7 +174,7 @@ struct SessionMode {
 }
 
 impl Mode for SessionMode {
-    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
+    fn run(self, x_env: ClientEnv) -> Result<Client> {
         todo!("session mode not implemented")
     }
 }
@@ -165,7 +188,7 @@ struct XinitCompatMode {}
 define_env!(pub XinitRC(PathBuf) = #raw "XINITRC");
 
 impl Mode for XinitCompatMode {
-    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
+    fn run(self, x_env: ClientEnv) -> Result<Client> {
         let rc_env = OsEnv::new_view().get::<XinitRC>().map(|var| var.0);
 
         let rc_user = || {
@@ -177,31 +200,33 @@ impl Mode for XinitCompatMode {
 
         let rc_system = || PathBuf::from("/etc/X11/xinit/xinitrc").ensure_exists();
 
-        let default_client = || {
-            warn!("Cannot find xinit RC, using default client.");
-            let mut cmd = Command::new("xterm");
-            cmd.args(["-geometry", "+1+1", "-n", "login"]);
-            cmd
+        let client_path = match rc_env.or_else(|_| rc_user()).or_else(|_| rc_system()).ok() {
+            Some(path) => path,
+            None => {
+                warn!("Cannot find xinit RC, using xterm as fallback client");
+                let mut xterm = Command::new("xterm");
+                xterm.args(["-geometry", "+1+1", "-n", "login"]);
+
+                return Ok(Client::Command(xterm));
+            }
         };
 
-        let mut client = rc_env
-            .or_else(|_| rc_user())
-            .or_else(|_| rc_system())
-            .map_or_else(
-                |_| {
-                    warn!("Using xterm as a fallback client");
-                    default_client()
-                },
-                Command::new,
-            );
+        let mut command = Command::new(&client_path);
+        command.envs(x_env.clone().to_env_diff());
 
-        client.envs(x_env.to_env_diff());
+        let client_process = match spawn_with_cleanup(command) {
+            Ok(process) => Ok(process),
+            // retry with shell
+            Err(e) if e.kind() != ErrorKind::PermissionDenied => {
+                let mut with_shell = Command::new("/bin/sh");
+                with_shell.arg(client_path).envs(x_env.to_env_diff());
 
-        let client = spawn_with_cleanup(client).ctx("Failed to spawn xinit RC subprocess")?;
+                spawn_with_cleanup(with_shell)
+            }
+            Err(other) => Err(other),
+        };
 
-        // TODO: retry with shell
-
-        Ok(Some(client))
+        Ok(Client::Process(client_process))
     }
 }
 
@@ -218,7 +243,7 @@ struct DelegateMode {
 }
 
 impl Mode for DelegateMode {
-    fn run(self, x_env: ClientEnv) -> Result<Option<ChildWithCleanup>> {
+    fn run(self, x_env: ClientEnv) -> Result<Client> {
         if self.systemd && self.path.is_some() {
             whatever!("Conflicting options: specify either --systemd or --path, not both.")
         };
@@ -239,7 +264,7 @@ impl Mode for DelegateMode {
             .send(x_env.to_vec().join(OsStr::new(";")).as_bytes())
             .ctx("Failed to send environment data")?;
 
-        Ok(None)
+        Ok(Client::None)
     }
 }
 
@@ -334,7 +359,7 @@ fn main() -> Result<()> {
     // NOTE: RuntimeDir persists until main is closed
     authority_manager.finish();
 
-    let mut client_child = args.mode.run((display, client_authority, window_path))?;
+    let client = args.mode.run((display, client_authority, window_path))?;
 
     if let Some(ref mut notifier) = notifier {
         notifier.notify_ready().ctx("Failed to signal readiness")?;
@@ -342,9 +367,7 @@ fn main() -> Result<()> {
 
     // TODO: is there a point in waiting on Xorg? Client should always close if XServer drops, right?
     // ...will systemd reap the zombie as part of session logout?
-    if let Some(ref mut client_child) = client_child {
-        client_child.wait().ctx("Error while waiting on client")?;
-    }
+    client.bind()?;
 
     if let Some(ref mut notifier) = notifier {
         let _best_effort = notifier.notify_stopping();
