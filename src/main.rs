@@ -164,22 +164,6 @@ impl Mode for DirectMode {
 }
 
 #[derive(FromArgs)]
-#[argh(subcommand, name = "session")]
-/// Run an xdg session. You should also consider running direct mode
-/// from a higher-level session manager.
-struct SessionMode {
-    /// xdg session name
-    #[argh(positional)]
-    name: String,
-}
-
-impl Mode for SessionMode {
-    fn run(self, x_env: ClientEnv) -> Result<Client> {
-        todo!("session mode not implemented")
-    }
-}
-
-#[derive(FromArgs)]
 #[argh(subcommand, name = "xinit")]
 /// Xinit compatibility mode.
 struct XinitCompatMode {}
@@ -273,7 +257,6 @@ impl Mode for DelegateMode {
 #[enum_dispatch(Mode)]
 enum ModeSubcommand {
     Direct(DirectMode),
-    Session(SessionMode),
     XinitCompat(XinitCompatMode),
     Delegate(DelegateMode),
 }
