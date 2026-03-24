@@ -11,7 +11,6 @@ use rustix::{
 use crate::{error::*, utils::send_fds::SendFds};
 
 static JOURNAL: OnceLock<JournalWriter> = OnceLock::new();
-
 const JOURNALD_PATH: &str = "/run/systemd/journal/socket";
 
 pub fn init_journald() -> Result<()> {

@@ -215,14 +215,57 @@ impl Mode for XinitCompatMode {
 }
 
 #[derive(FromArgs)]
+#[argh(subcommand, name = "session")]
+/// Run an xdg session. You should also consider running direct mode
+/// from a higher-level session manager.
+pub struct SessionMode {
+    /// xdg session name
+    #[argh(positional)]
+    name: String,
+}
+
+#[cfg(feature = "session")]
+impl Mode for SessionMode {
+    fn run(self, x_env: ClientEnv) -> Result<Client> {
+        use freedesktop_session_parser::{SessionKind, get_session_entry};
+
+        let session = get_session_entry(SessionKind::X11, &self.name)
+            .ctx("Error while reading session definition")?;
+
+        let mut command = Command::new(session.executable);
+        if let Some(workdir) = session.working_directory {
+            command.current_dir(workdir);
+        }
+
+        match session.desktop_names {
+            Some(xdg_desktop_list) => {
+                if let Some(xdg_desktop) = xdg_desktop_list.as_single_desktop() {
+                    command.envs(xdg_desktop.to_env_diff());
+                }
+
+                command.envs(xdg_desktop_list.to_env_diff());
+            }
+            None => {
+                warn!("The session's definition does not provide XDG desktop name(s)");
+            }
+        };
+
+        command.envs(x_env.to_env_diff());
+
+        Ok(Client::Command(command))
+    }
+}
+
+#[derive(FromArgs)]
 #[argh(subcommand, name = "xorg-delegate")]
 /// Delegate client lifecycle. Called by a cooperative session manager.
 struct DelegateMode {
-    #[argh(switch)]
     /// use systemd socket activation
+    #[argh(switch)]
     systemd: bool,
-    #[argh(option)]
+
     /// use socket on path
+    #[argh(option)]
     path: Option<PathBuf>,
 }
 
@@ -259,25 +302,33 @@ enum ModeSubcommand {
     Direct(DirectMode),
     XinitCompat(XinitCompatMode),
     Delegate(DelegateMode),
+
+    #[cfg(feature = "session")]
+    Session(SessionMode),
 }
 
 #[derive(FromArgs)]
-#[rustfmt::skip]
+
 /// Run Xorg like a wayland session
 struct Args {
     /// override the path used to exec Xorg
-    #[argh(option, default = "DEFAULT_XORG_PATH.into()")] xorg_path: PathBuf,
-    
-    /// omit XAuthority locking (use at your own risk!)
-    #[argh(switch)] skip_locks: bool,
-    
-    /// use systemd notifications
-    #[argh(switch)] notify: bool,
+    #[argh(option, default = "DEFAULT_XORG_PATH.into()")]
+    xorg_path: PathBuf,
 
-    #[argh(subcommand)] mode: ModeSubcommand,
+    /// omit XAuthority locking (use at your own risk!)
+    #[argh(switch)]
+    skip_locks: bool,
+
+    /// use systemd notifications
+    #[argh(switch)]
+    notify: bool,
+
+    #[argh(subcommand)]
+    mode: ModeSubcommand,
 
     // arguments passed verbatim to Xorg
-    #[argh(positional)] xorg_args: Vec<String>,
+    #[argh(positional)]
+    xorg_args: Vec<String>,
 }
 
 // TODO: display this somewhere
