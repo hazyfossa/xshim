@@ -1,4 +1,4 @@
-use envy::{Env, define_env, parse::EnvironmentParse};
+use envy::{define_env, parse::EnvironmentParse};
 use snafu::{OptionExt, ResultExt};
 
 define_env!(pub Seat(String) = "XDG_SEAT");
@@ -39,7 +39,7 @@ impl EnvironmentParse<String> for Display {
 define_env!(pub WindowPath(String) = "WINDOWPATH");
 
 impl WindowPath {
-    pub fn previous_plus_vt(env: &impl Env, vt: &VtNumber) -> Self {
+    pub fn previous_plus_vt(env: &impl envy::Get, vt: &VtNumber) -> Self {
         let previous = env.get::<Self>();
         Self(match previous {
             Ok(path) => format!("{}:{}", path.0, vt.0),

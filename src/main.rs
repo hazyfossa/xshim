@@ -7,7 +7,7 @@ mod xauthority;
 
 use std::{
     env::home_dir,
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     io::{self, BufRead, BufReader, ErrorKind, PipeReader, pipe},
     os::{
         fd::AsRawFd,
@@ -20,10 +20,8 @@ use std::{
 use argh::FromArgs;
 use enum_dispatch::enum_dispatch;
 use envy::{
-    Env,
-    container::OsEnv,
-    define_env,
-    diff::{Diff, EnvVecExt},
+    Get, OsEnv, Set, Unset, define_env,
+    diff::{self, Diff},
 };
 
 use crate::{
@@ -39,7 +37,7 @@ use crate::{
     xauthority::{ClientAuthorityEnv, XAuthorityManager},
 };
 
-// You may want to change this appropriately if you're making a package
+// You may want to change this if you're making a package
 const DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 
 struct DisplayReceiver(PipeReader);
@@ -113,7 +111,13 @@ fn spawn_server(
     Ok((display_rx, child))
 }
 
-type ClientEnv = (Display, ClientAuthorityEnv, WindowPath);
+type ClientEnv = (
+    Display,
+    ClientAuthorityEnv,
+    WindowPath,
+    Unset<VtNumber>,
+    Unset<Seat>,
+);
 
 enum Client {
     Command(Command),
@@ -157,7 +161,7 @@ struct DirectMode {
 impl Mode for DirectMode {
     fn run(self, x_env: ClientEnv) -> Result<Client> {
         let mut command = Command::new(self.executable);
-        command.envs(x_env.to_env_diff());
+        command.apply(x_env);
 
         Ok(Client::Command(command))
     }
@@ -196,14 +200,15 @@ impl Mode for XinitCompatMode {
         };
 
         let mut command = Command::new(&client_path);
-        command.envs(x_env.clone().to_env_diff());
+        command.apply(x_env.clone());
 
         let client_process = match spawn_with_cleanup(command) {
             Ok(process) => Ok(process),
             // retry with shell
             Err(e) if e.kind() != ErrorKind::PermissionDenied => {
                 let mut with_shell = Command::new("/bin/sh");
-                with_shell.arg(client_path).envs(x_env.to_env_diff());
+                with_shell.arg(client_path);
+                with_shell.apply(x_env);
 
                 spawn_with_cleanup(with_shell)
             }
@@ -240,17 +245,17 @@ impl Mode for SessionMode {
         match session.desktop_names {
             Some(xdg_desktop_list) => {
                 if let Some(xdg_desktop) = xdg_desktop_list.as_single_desktop() {
-                    command.envs(xdg_desktop.to_env_diff());
+                    command.apply(xdg_desktop);
                 }
 
-                command.envs(xdg_desktop_list.to_env_diff());
+                command.apply(xdg_desktop_list);
             }
             None => {
                 warn!("The session's definition does not provide XDG desktop name(s)");
             }
         };
 
-        command.envs(x_env.to_env_diff());
+        command.apply(x_env);
 
         Ok(Client::Command(command))
     }
@@ -287,8 +292,24 @@ impl Mode for DelegateMode {
             }
         };
 
+        let msg = x_env
+            .to_env_diff()
+            .into_iter()
+            .filter_map(|(k, v)| match v {
+                Some(v) => {
+                    let mut buf = OsString::new();
+                    buf.push(k);
+                    buf.push("=");
+                    buf.push(v);
+                    Some(buf)
+                }
+                None => None,
+            })
+            .collect::<Vec<_>>()
+            .join(OsStr::new(";"));
+
         socket
-            .send(x_env.to_vec().join(OsStr::new(";")).as_bytes())
+            .send(msg.as_bytes())
             .ctx("Failed to send environment data")?;
 
         Ok(Client::None)
@@ -388,12 +409,18 @@ fn main() -> Result<()> {
 
     let client_authority = authority_manager
         .setup_client(&display)
-        .ctx("failed to define client authority")?;
+        .ctx("Failed to define client authority")?;
 
     // NOTE: RuntimeDir persists until main is closed
     authority_manager.finish();
 
-    let client = args.mode.run((display, client_authority, window_path))?;
+    let client = args.mode.run((
+        display,
+        client_authority,
+        window_path,
+        diff::unset(),
+        diff::unset(),
+    ))?;
 
     if let Some(ref mut notifier) = notifier {
         notifier.notify_ready().ctx("Failed to signal readiness")?;

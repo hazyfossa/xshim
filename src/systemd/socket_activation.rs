@@ -3,7 +3,7 @@ use std::{
     os::fd::{FromRawFd, RawFd},
 };
 
-use envy::{Env, container::OsEnv, define_env};
+use envy::{Get, container::OsEnv, define_env};
 use rustix::process;
 use snafu::{Snafu, ensure};
 

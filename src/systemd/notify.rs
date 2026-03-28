@@ -1,16 +1,15 @@
 use std::{os::unix::net::UnixDatagram, path::PathBuf};
 
 use crate::error::*;
-use envy::{Env, define_env};
 
 pub struct Notifier {
     socket: UnixDatagram,
 }
 
-define_env!(NotifySocket(PathBuf) = #raw "NOTIFY_SOCKET");
+envy::define_env!(NotifySocket(PathBuf) = #raw "NOTIFY_SOCKET");
 
 impl Notifier {
-    pub fn from_env(env: &impl Env) -> Result<Self> {
+    pub fn from_env(env: &impl envy::Get) -> Result<Self> {
         let path = env
             .get::<NotifySocket>()
             .ctx("Cannot find a notify target in environment")?;

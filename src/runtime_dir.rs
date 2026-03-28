@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
 };
 
-use envy::{Env, define_env};
+use envy::define_env;
 use snafu::whatever;
 
 use crate::error::*;
@@ -36,7 +36,7 @@ pub struct RuntimeDirManager {
 define_env!(pub RuntimeDirEnv(PathBuf) = #raw "XDG_RUNTIME_DIR");
 
 impl RuntimeDirManager {
-    pub fn from_env(env: &impl Env) -> Result<Self> {
+    pub fn from_env(env: &impl envy::Get) -> Result<Self> {
         let path = env
             .get::<RuntimeDirEnv>()
             .ctx("Environment does not provide a runtime directory")?
