@@ -7,9 +7,8 @@ use std::{
     path::Path,
 };
 
+use eyre::{Context, Result};
 use lock::Lock;
-
-use crate::error::*;
 
 pub struct AuthorityFile {
     file: File,
@@ -47,7 +46,7 @@ impl AuthorityFile {
         for entry in authority {
             entry
                 .write(&mut self.file)
-                .ctx("Failed to write into XAuthority file")?
+                .context("Failed to write into XAuthority file")?
         }
 
         Ok(())

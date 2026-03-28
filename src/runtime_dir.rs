@@ -6,9 +6,7 @@ use std::{
 };
 
 use envy::define_env;
-use snafu::whatever;
-
-use crate::error::*;
+use eyre::{Context, Result, ensure};
 
 pub struct RuntimeDir {
     pub path: PathBuf,
@@ -39,19 +37,18 @@ impl RuntimeDirManager {
     pub fn from_env(env: &impl envy::Get) -> Result<Self> {
         let path = env
             .get::<RuntimeDirEnv>()
-            .ctx("Environment does not provide a runtime directory")?
+            .context("Environment does not provide a runtime directory")?
             .0;
 
         let permissions = fs::metadata(&path)
-            .ctx("Cannot query runtime dir metadata. Does it exist?")?
+            .context("Cannot query runtime dir metadata. Does it exist?")?
             .permissions()
             .mode();
 
-        if permissions & 0o077 != 0 {
-            whatever!(
-                "Runtime directory is insecure: expecting permissions `077`, got {permissions}"
-            )
-        };
+        ensure!(
+            permissions & 0o077 == 0,
+            "Runtime directory is insecure: expecting permissions `077`, got {permissions}"
+        );
 
         Ok(Self { path })
     }
@@ -62,7 +59,7 @@ impl RuntimeDirManager {
         DirBuilder::new()
             .mode(0o700)
             .create(&directory)
-            .ctx(format!("cannot create path: {directory:?}"))?;
+            .context(format!("cannot create path: {directory:?}"))?;
 
         Ok(RuntimeDir { path: directory })
     }

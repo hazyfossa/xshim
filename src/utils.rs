@@ -38,10 +38,9 @@ pub mod fd {
         process::Command,
     };
 
-    use rustix::io::FdFlags;
-    use snafu::OptionExt;
-
     use crate::Result;
+    use eyre::ContextCompat;
+    use rustix::io::FdFlags;
 
     trait_alias!(pub trait FdSource = Iterator<Item = RawFd> + Send + Sync + 'static);
 
@@ -66,7 +65,7 @@ pub mod fd {
                 )
             });
 
-            Self::manual(3..=capacity)
+            Self::manual(3..=3 + capacity + 1)
         }
     }
 
@@ -90,7 +89,7 @@ pub mod fd {
             let mapped_fd = self
                 .free_fd_source
                 .next()
-                .whatever_context("Free fd source exhausted")?;
+                .context("Free fd source exhausted")?;
 
             self.mappings.push(FdMapping {
                 parent_fd: fd,
@@ -220,7 +219,7 @@ pub mod subprocess {
 pub mod path {
     use std::path::Path;
 
-    use crate::error::*;
+    use eyre::{Result, ensure};
 
     pub trait EnsureExistsExt: Sized {
         fn ensure_exists(self) -> Result<Self>;
@@ -232,7 +231,7 @@ pub mod path {
     {
         fn ensure_exists(self) -> Result<Self> {
             let this = self.as_ref();
-            snafu::ensure_whatever!(this.exists(), "the path {} does not exist", this.display());
+            ensure!(this.exists(), "the path {} does not exist", this.display());
             Ok(self)
         }
     }
@@ -267,4 +266,35 @@ pub mod send_fds {
 
     impl SendFds for UnixDatagram {}
     impl SendFds for UnixStream {}
+}
+
+pub mod warn {
+    // TODO: zero-alloc with format_args
+    // note that it may be impossible (journald encoding requires us to check for \n)
+    // which already necessitates some sort of string lookup before we even started writing
+    #[macro_export]
+    macro_rules! warn {
+        ($($tt:tt)?) => {
+            let _ = $crate::systemd::journald::log($
+                crate::systemd::journald::LogLevel::Warning,
+                &format!($($tt)?)
+            );
+        };
+    }
+
+    pub trait WarnExt<T> {
+        fn warn(self) -> Option<T>;
+    }
+
+    impl<T> WarnExt<T> for eyre::Result<T> {
+        fn warn(self) -> Option<T> {
+            match self {
+                Ok(value) => Some(value),
+                Err(e) => {
+                    warn!("{e:?}");
+                    None
+                }
+            }
+        }
+    }
 }

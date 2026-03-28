@@ -1,6 +1,6 @@
 use std::{os::unix::net::UnixDatagram, path::PathBuf};
 
-use crate::error::*;
+use eyre::{Context, Result};
 
 pub struct Notifier {
     socket: UnixDatagram,
@@ -12,12 +12,12 @@ impl Notifier {
     pub fn from_env(env: &impl envy::Get) -> Result<Self> {
         let path = env
             .get::<NotifySocket>()
-            .ctx("Cannot find a notify target in environment")?;
+            .context("Cannot find a notify target in environment")?;
 
-        let socket = UnixDatagram::unbound().ctx("Cannot open a datagram socket")?;
+        let socket = UnixDatagram::unbound().context("Cannot open a datagram socket")?;
         socket
             .connect(&*path)
-            .ctx("Cannot connect to notifier socket")?;
+            .context("Cannot connect to notifier socket")?;
 
         Ok(Self { socket })
     }
@@ -25,7 +25,7 @@ impl Notifier {
     fn notify(&mut self, payload: &str) -> Result<()> {
         self.socket
             .send(payload.as_bytes())
-            .ctx("Sending notification on socket failed")?;
+            .context("Sending notification on socket failed")?;
 
         Ok(())
     }

@@ -2,14 +2,13 @@ mod encoding;
 use encoding::*;
 
 mod file;
+use eyre::{Context, Result};
 use file::*;
 
 use std::{
     io,
     path::{Path, PathBuf},
 };
-
-use crate::error::*;
 
 use envy::define_env;
 use rustix::{
@@ -23,7 +22,7 @@ define_env!(pub ClientAuthorityEnv(PathBuf) = #raw "XAUTHORITY");
 
 fn make_cookie() -> Result<Cookie> {
     let mut cookie_buf = [0u8; Cookie::BYTES_LEN];
-    getrandom(&mut cookie_buf, GetRandomFlags::empty()).ctx("getrandom() failed")?;
+    getrandom(&mut cookie_buf, GetRandomFlags::empty()).context("getrandom() failed")?;
     Ok(Cookie::new(cookie_buf))
 }
 
@@ -76,7 +75,7 @@ impl XAuthorityManager {
 
         let mut xauth_file = self
             .create_auth_file(&path)
-            .ctx(format!("Failed to create {path:?}"))?;
+            .context(format!("Failed to create {path:?}"))?;
 
         xauth_file.set(authority)?;
 
@@ -108,7 +107,7 @@ impl XAuthorityManager {
 
         let mut xauth_file = self
             .create_auth_file(&path)
-            .ctx(format!("Failed to create {path:?}"))?;
+            .context(format!("Failed to create {path:?}"))?;
 
         xauth_file.set(authority)?;
 

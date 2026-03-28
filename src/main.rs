@@ -1,5 +1,4 @@
 mod env_definitions;
-mod error;
 mod runtime_dir;
 mod systemd;
 mod utils;
@@ -23,16 +22,17 @@ use envy::{
     Get, OsEnv, Set, Unset, define_env,
     diff::{self, Diff},
 };
+use eyre::{Context, ContextCompat, Result, bail};
 
 use crate::{
     env_definitions::*,
-    error::*,
     runtime_dir::RuntimeDirManager,
     systemd::{journald, notify::Notifier},
     utils::{
         fd::{CommandFdExt, FdContext, SimpleFdContext},
         path::EnsureExistsExt,
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
+        warn::WarnExt,
     },
     xauthority::{ClientAuthorityEnv, XAuthorityManager},
 };
@@ -43,10 +43,10 @@ const DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 struct DisplayReceiver(PipeReader);
 
 impl DisplayReceiver {
-    fn setup(fd_ctx: &mut SimpleFdContext, command: &mut Command) -> Result<Self> {
-        let (display_rx, display_tx) = pipe().ctx("Failed to open pipe for display fd")?;
+    fn setup(fd_context: &mut SimpleFdContext, command: &mut Command) -> Result<Self> {
+        let (display_rx, display_tx) = pipe().context("Failed to open pipe for display fd")?;
 
-        let display_tx_passed = fd_ctx.pass(display_tx.into())?;
+        let display_tx_passed = fd_context.pass(display_tx.into())?;
 
         command.args(["-displayfd", &display_tx_passed.as_raw_fd().to_string()]);
 
@@ -59,16 +59,16 @@ impl DisplayReceiver {
 
         reader
             .read_line(&mut display_buf)
-            .ctx("Failed to read display number")?;
+            .context("Failed to read display number")?;
 
         if display_buf.is_empty() {
-            whatever!("Internal Xorg error. See logs above for details.")
+            bail!("Internal Xorg error. See logs above for details.")
         }
 
         let display_number = display_buf
             .trim_end()
             .parse()
-            .ctx("Xorg provided invalid display number")?;
+            .context("Xorg provided invalid display number")?;
 
         Ok(Display::from_number(display_number))
     }
@@ -81,7 +81,7 @@ fn spawn_server(
     vt: VtNumber,
     seat: Option<Seat>,
 ) -> Result<(DisplayReceiver, ChildWithCleanup)> {
-    let mut fd_ctx = FdContext::new(1);
+    let mut fd_context = FdContext::new(1);
 
     let mut command = Command::new(path);
 
@@ -102,11 +102,11 @@ fn spawn_server(
         .args(extra_args)
         .envs([("XORG_RUN_AS_USER_OK", "1")]); // TODO: relevant?
 
-    let display_rx = DisplayReceiver::setup(&mut fd_ctx, &mut command)?;
-    command.with_fd_context(fd_ctx);
+    let display_rx = DisplayReceiver::setup(&mut fd_context, &mut command)?;
+    command.with_fd_context(fd_context);
 
     // TODO: proxy logs
-    let child = spawn_with_cleanup(command).ctx("Failed to spawn Xorg")?;
+    let child = spawn_with_cleanup(command).context("Failed to spawn Xorg")?;
 
     Ok((display_rx, child))
 }
@@ -135,7 +135,7 @@ impl Client {
             }
             // if provided a process, wait on in
             Client::Process(process) => Ok(process
-                .ctx("Failed to spawn client subprocess")?
+                .context("Failed to spawn client subprocess")?
                 .wait()
                 .unwrap()),
             // if not dealing with processes, return successs
@@ -181,7 +181,7 @@ impl Mode for XinitCompatMode {
 
         let rc_user = || {
             home_dir()
-                .ctx("cannot find the user home directory")?
+                .context("cannot find the user home directory")?
                 .join(".xinitrc")
                 .ensure_exists()
         };
@@ -221,6 +221,7 @@ impl Mode for XinitCompatMode {
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "session")]
+#[cfg(feature = "session")]
 /// Run an xdg session. You should also consider running direct mode
 /// from a higher-level session manager.
 pub struct SessionMode {
@@ -235,7 +236,7 @@ impl Mode for SessionMode {
         use freedesktop_session_parser::{SessionKind, get_session_entry};
 
         let session = get_session_entry(SessionKind::X11, &self.name)
-            .ctx("Error while reading session definition")?;
+            .context("Error while reading session definition")?;
 
         let mut command = Command::new(session.executable);
         if let Some(workdir) = session.working_directory {
@@ -277,18 +278,18 @@ struct DelegateMode {
 impl Mode for DelegateMode {
     fn run(self, x_env: ClientEnv) -> Result<Client> {
         if self.systemd && self.path.is_some() {
-            whatever!("Conflicting options: specify either --systemd or --path, not both.")
+            bail!("Conflicting options: specify either --systemd or --path, not both.")
         };
 
         let socket = match self.systemd {
             // Safety: by setting --systemd the user guarantees the .socket unit to be a datagram socket
             true => unsafe {
                 systemd::socket_activation::listen_fd_simple()
-                    .ctx("Failed to receive a socket from systemd")?
+                    .context("Failed to receive a socket from systemd")?
             },
             false => {
-                let path = self.path.ctx("Socket path not specified")?;
-                UnixDatagram::bind(&path).ctx(format!("Cannot bind to socket at {path:?}"))?
+                let path = self.path.context("Socket path not specified")?;
+                UnixDatagram::bind(&path).context(format!("Cannot bind to socket at {path:?}"))?
             }
         };
 
@@ -310,7 +311,7 @@ impl Mode for DelegateMode {
 
         socket
             .send(msg.as_bytes())
-            .ctx("Failed to send environment data")?;
+            .context("Failed to send environment data")?;
 
         Ok(Client::None)
     }
@@ -369,50 +370,51 @@ fn main() -> Result<()> {
     let args: Args = argh::from_env();
 
     // TODO: make this non-fatal, fallback to stderr
-    journald::init_journald().ctx("Failed to initialize journald client")?;
+    journald::init_journald().context("Failed to initialize journald client")?;
+    simple_eyre::install()?;
 
     // TODO: add an unsafe option to try and determine one anyway
-    let vt = env.get::<VtNumber>().ctx("Cannot find a VT number allocated for current session. Are you running this from a correct place?")?;
+    let vt = env.get::<VtNumber>().context("Cannot find a VT number allocated for current session. Are you running this from a correct place?")?;
 
     let seat = env
         .get::<Seat>()
-        .ctx("Cannot find a seat for the current session")
+        .context("Cannot find a seat for the current session")
         .warn();
 
     // TODO: is this even relevant?
     let window_path = WindowPath::previous_plus_vt(&env, &vt);
 
     let mut notifier = match args.notify {
-        true => Some(Notifier::from_env(&env).ctx("Failed to setup systemd notifications")?),
+        true => Some(Notifier::from_env(&env).context("Failed to setup systemd notifications")?),
         false => None,
     };
 
     let rt_dir_manager =
-        RuntimeDirManager::from_env(&env).ctx("Cannot setup runtime dir manager")?;
+        RuntimeDirManager::from_env(&env).context("Cannot setup runtime dir manager")?;
 
     let runtime_dir = rt_dir_manager
         .create(&format!("xshim-{}", *vt))
-        .ctx("Failed to create runtime directory")?;
+        .context("Failed to create runtime directory")?;
 
     let authority_manager = XAuthorityManager::new(runtime_dir, args.skip_locks)
-        .ctx("Cannot setup XAuthority manager")?;
+        .context("Cannot setup XAuthority manager")?;
 
     let server_authority = authority_manager
         .setup_server()
-        .ctx("Failed to define server authority")?;
+        .context("Failed to define server authority")?;
 
     let (future_display, _xorg_child) =
         spawn_server(&args.xorg_path, &args.xorg_args, server_authority, vt, seat)
-            .ctx("Failed to spawn Xorg")?;
+            .context("Failed to spawn Xorg")?;
 
     let display = future_display.blocking_wait()?;
 
     let client_authority = authority_manager
         .setup_client(&display)
-        .ctx("Failed to define client authority")?;
+        .context("Failed to define client authority")?;
 
     // NOTE: RuntimeDir persists until main is closed
-    authority_manager.finish();
+    let _persist = authority_manager.finish();
 
     let client = args.mode.run((
         display,
@@ -423,7 +425,9 @@ fn main() -> Result<()> {
     ))?;
 
     if let Some(ref mut notifier) = notifier {
-        notifier.notify_ready().ctx("Failed to signal readiness")?;
+        notifier
+            .notify_ready()
+            .context("Failed to signal readiness")?;
     }
 
     // TODO: is there a point in waiting on Xorg? Client should always close if XServer drops, right?

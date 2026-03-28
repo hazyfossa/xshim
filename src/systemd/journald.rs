@@ -3,25 +3,26 @@ use std::{
     sync::OnceLock,
 };
 
+use eyre::{Context, ContextCompat, Result, bail};
 use rustix::{
     fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create},
     io::{self, Errno},
 };
 
-use crate::{error::*, utils::send_fds::SendFds};
+use crate::utils::send_fds::SendFds;
 
 static JOURNAL: OnceLock<JournalWriter> = OnceLock::new();
 const JOURNALD_PATH: &str = "/run/systemd/journal/socket";
 
 pub fn init_journald() -> Result<()> {
     let writer = JournalWriter::new()?;
-    JOURNAL.set(writer).ok().ctx("Already initialized")
+    JOURNAL.set(writer).ok().context("Already initialized")
 }
 
 pub fn log(level: LogLevel, message: &str) -> Result<()> {
     JOURNAL
         .get()
-        .ctx("Journald not initialized")?
+        .context("Journald not initialized")?
         .log(level, message)
 }
 
@@ -67,10 +68,10 @@ pub struct JournalWriter {
 
 impl JournalWriter {
     pub fn new() -> Result<Self> {
-        let socket = UnixDatagram::unbound().ctx("Cannot open a datagram socket")?;
+        let socket = UnixDatagram::unbound().context("Cannot open a datagram socket")?;
         socket
             .connect(JOURNALD_PATH)
-            .ctx("Cannot connect to notifier socket")?;
+            .context("Cannot connect to notifier socket")?;
 
         Ok(Self { socket })
     }
@@ -81,9 +82,9 @@ impl JournalWriter {
 
             Err(e) if Errno::from_io_error(&e) == Some(Errno::MSGSIZE) => self
                 .send_large(payload)
-                .ctx("Failed to transmit large payload"),
+                .context("Failed to transmit large payload"),
 
-            Err(other) => whatever!("socket error: {}", other),
+            Err(other) => bail!("socket error: {}", other),
         }
     }
 
@@ -92,15 +93,15 @@ impl JournalWriter {
             "journald-large-payload-carrier",
             MemfdFlags::ALLOW_SEALING | MemfdFlags::CLOEXEC,
         )
-        .ctx("Failed to create memfd")?;
+        .context("Failed to create memfd")?;
 
-        io::write(&fd, payload).ctx("Failed to write payload to memfd")?;
+        io::write(&fd, payload).context("Failed to write payload to memfd")?;
 
-        fcntl_add_seals(&fd, SealFlags::all()).ctx("Failed to seal memfd")?;
+        fcntl_add_seals(&fd, SealFlags::all()).context("Failed to seal memfd")?;
 
         self.socket
             .send_fds(&[fd.as_fd()])
-            .ctx("Failed to send fd on socket")?;
+            .context("Failed to send fd on socket")?;
 
         Ok(())
     }

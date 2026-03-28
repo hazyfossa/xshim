@@ -1,5 +1,4 @@
 use envy::{define_env, parse::EnvironmentParse};
-use snafu::{OptionExt, ResultExt};
 
 define_env!(pub Seat(String) = "XDG_SEAT");
 define_env!(pub VtNumber(u8) = "XDG_VTNR");
@@ -16,23 +15,30 @@ impl Display {
     }
 }
 
+// TODO
+#[derive(Debug)]
+pub struct DisplayParseError;
+
+impl std::error::Error for DisplayParseError {}
+impl std::fmt::Display for DisplayParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Display is an invalid value")
+    }
+}
+
 impl EnvironmentParse<String> for Display {
-    type Error = snafu::Whatever;
+    type Error = DisplayParseError;
 
     fn env_serialize(self) -> String {
         format!(":{}", self.0)
     }
 
     fn env_deserialize(value: String) -> Result<Self, Self::Error> {
-        let value = value
-            .strip_prefix(":")
-            .whatever_context("display should start with :")?;
+        let value = value.strip_prefix(":").ok_or(DisplayParseError)?;
+        // .whatever_context("display should start with :")?;
+        let value = value.parse().map_err(|_| DisplayParseError)?;
 
-        Ok(Self(
-            value
-                .parse()
-                .whatever_context("display should be an integer")?,
-        ))
+        Ok(Self(value))
     }
 }
 
