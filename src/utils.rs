@@ -269,6 +269,8 @@ pub mod send_fds {
 }
 
 pub mod warn {
+    use std::fmt::Debug;
+
     // TODO: zero-alloc with format_args
     // note that it may be impossible (journald encoding requires us to check for \n)
     // which already necessitates some sort of string lookup before we even started writing
@@ -286,7 +288,7 @@ pub mod warn {
         fn warn(self) -> Option<T>;
     }
 
-    impl<T> WarnExt<T> for eyre::Result<T> {
+    impl<T, E: Debug> WarnExt<T> for std::result::Result<T, E> {
         fn warn(self) -> Option<T> {
             match self {
                 Ok(value) => Some(value),

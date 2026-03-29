@@ -25,7 +25,7 @@ use zbus::proxy;
     default_service = "org.freedesktop.login1",
     default_path = "/org/freedesktop/login1"
 )]
-pub trait Manager {
+pub trait LoginManager {
     /// GetSessionByPID method
     #[zbus(name = "GetSessionByPID")]
     fn get_session_by_pid(&self, pid: u32) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;

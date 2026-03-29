@@ -53,3 +53,15 @@ impl WindowPath {
         })
     }
 }
+
+define_env!(pub PathEnv(String) = "PATH");
+
+impl std::ops::Add for PathEnv {
+    type Output = PathEnv;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let a = self.0;
+        let b = rhs.0;
+        PathEnv([a, b].join(":"))
+    }
+}

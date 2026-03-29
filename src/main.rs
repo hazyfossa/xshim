@@ -7,7 +7,7 @@ mod xauthority;
 
 use std::{
     env::home_dir,
-    ffi::{OsStr, OsString},
+    ffi::OsStr,
     io::{self, BufRead, BufReader, ErrorKind, PipeReader, pipe},
     os::{
         fd::AsRawFd,
@@ -17,11 +17,13 @@ use std::{
     process::{Command, ExitStatus},
 };
 
-use argh::FromArgs;
+use argh::{FromArgValue, FromArgs};
 use enum_dispatch::enum_dispatch;
 use envy::{
-    Get, OsEnv, Set, Unset, define_env,
-    diff::{self, Diff},
+    Get, OsEnv, Set, Unset,
+    container::EnvBuf,
+    define_env,
+    diff::{self, Diff, Entry},
 };
 use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result, bail};
 
@@ -29,7 +31,7 @@ use crate::{
     context::SessionContext,
     env_definitions::*,
     runtime_dir::RuntimeDirManager,
-    systemd::{journald, notify::Notifier},
+    systemd::{dbus::environment::SystemdEnvironment, journald, notify::Notifier},
     utils::{
         fd::{CommandFdExt, FdContext, SimpleFdContext},
         path::EnsureExistsExt,
@@ -298,15 +300,9 @@ impl Mode for DelegateMode {
         let msg = x_env
             .to_env_diff()
             .into_iter()
-            .filter_map(|(k, v)| match v {
-                Some(v) => {
-                    let mut buf = OsString::new();
-                    buf.push(k);
-                    buf.push("=");
-                    buf.push(v);
-                    Some(buf)
-                }
-                None => None,
+            .filter_map(|entry| match entry {
+                Entry::Set { .. } => Some(entry.to_os_string()),
+                Entry::Unset { .. } => None,
             })
             .collect::<Vec<_>>()
             .join(OsStr::new(";"));
@@ -331,8 +327,66 @@ enum ModeSubcommand {
     Session(SessionMode),
 }
 
-#[derive(FromArgs)]
+#[derive(FromArgValue)]
+enum EnvironmentResolution {
+    /// use unix session environment (shell profile)
+    Unix,
+    /// use systemd environment
+    Systemd,
+    /// merge systemd and unix environment. unix values take precedence
+    Merge,
+}
 
+// TODO: merge into envy?
+fn env_erase<T: Diff>(x: T) -> EnvBuf {
+    EnvBuf::from_entries(x.to_env_diff())
+}
+
+fn env_path_merge(primary: &impl envy::Get, secondary: &impl envy::Get) -> Option<PathEnv> {
+    let a = primary.get::<PathEnv>().ok();
+    let b = secondary.get::<PathEnv>().ok();
+
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a + b),
+        (a, None) => a,
+        (None, b) => b,
+    }
+}
+
+impl EnvironmentResolution {
+    // TODO: enum dispatch?
+    async fn resolve(&self) -> Result<EnvBuf> {
+        let unix_env = OsEnv::new_view();
+
+        if matches!(self, EnvironmentResolution::Unix) {
+            return Ok(env_erase(unix_env));
+        }
+
+        let session_bus = zbus::Connection::session()
+            .await
+            .context("Failed to connect to DBus (session bus)")?;
+
+        let systemd_env = SystemdEnvironment::open(&session_bus)
+            .await
+            .context("Cannot resolve systemd environment")?;
+
+        let path = env_path_merge(&systemd_env, &unix_env);
+
+        if matches!(self, EnvironmentResolution::Systemd) {
+            let mut env = env_erase(systemd_env);
+            env.apply(path);
+            return Ok(env);
+        };
+
+        let mut merged = EnvBuf::new();
+        merged.apply(systemd_env);
+        merged.apply(unix_env);
+        merged.apply(path);
+        Ok(merged)
+    }
+}
+
+#[derive(FromArgs)]
 /// Run Xorg like a wayland session
 struct Args {
     /// override the path used to exec Xorg
@@ -346,6 +400,10 @@ struct Args {
     /// use systemd notifications
     #[argh(switch)]
     notify: bool,
+
+    #[argh(option)]
+    /// environment resolution strategy
+    env: EnvironmentResolution,
 
     #[argh(subcommand)]
     mode: ModeSubcommand,
@@ -369,8 +427,8 @@ fn _help_skip_locks() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let env = OsEnv::new_view();
     let args: Args = argh::from_env();
+    let env = args.env.resolve().await?;
 
     // TODO: make this non-fatal, fallback to stderr
     journald::init_journald().context("Failed to initialize journald client")?;
