@@ -367,7 +367,8 @@ fn _help_skip_locks() {
     )
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let env = OsEnv::new_view();
     let args: Args = argh::from_env();
 

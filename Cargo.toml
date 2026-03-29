@@ -18,6 +18,8 @@ rustix = { version = "1.1.4", features = [
     "system",
 ] }
 simple-eyre = "0.3.1"
+tokio = { version = "1.50.0", features = ["rt", "macros"] }
+zbus = { version = "5.14.0", default-features = false, features = ["tokio"] }
 zeroize = { version = "1.8.2", features = ["derive"] }
 
 [profile.release]
