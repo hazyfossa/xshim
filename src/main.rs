@@ -17,7 +17,7 @@ use std::{
     process::{Command, ExitStatus},
 };
 
-use argh::{FromArgValue, FromArgs};
+use argh::FromArgs;
 use enum_dispatch::enum_dispatch;
 use envy::{
     Get, OsEnv, Set, Unset,
@@ -31,7 +31,7 @@ use crate::{
     context::SessionContext,
     env_definitions::*,
     runtime_dir::RuntimeDirManager,
-    systemd::{dbus::environment::SystemdEnvironment, journald, notify::Notifier},
+    systemd::{journald, notify::Notifier},
     utils::{
         fd::{CommandFdExt, FdContext, SimpleFdContext},
         path::EnsureExistsExt,
@@ -327,38 +327,42 @@ enum ModeSubcommand {
     Session(SessionMode),
 }
 
-#[derive(FromArgValue)]
-enum EnvironmentResolution {
-    /// use unix session environment (shell profile)
-    Unix,
-    /// use systemd environment
-    Systemd,
-    /// merge systemd and unix environment. unix values take precedence
-    Merge,
-}
-
 // TODO: merge into envy?
 fn env_erase<T: Diff>(x: T) -> EnvBuf {
     EnvBuf::from_entries(x.to_env_diff())
 }
 
-fn env_path_merge(primary: &impl envy::Get, secondary: &impl envy::Get) -> Option<PathEnv> {
-    let a = primary.get::<PathEnv>().ok();
-    let b = secondary.get::<PathEnv>().ok();
+#[cfg(feature = "dbus")]
+mod resolve_env {
+    use super::*;
 
-    match (a, b) {
-        (Some(a), Some(b)) => Some(a + b),
-        (a, None) => a,
-        (None, b) => b,
+    #[derive(argh::FromArgValue)]
+    pub enum Strategy {
+        /// use unix session environment (shell profile)
+        Unix,
+        /// use systemd environment
+        Systemd,
+        /// merge systemd and unix environment. unix values take precedence
+        Merge,
     }
-}
 
-impl EnvironmentResolution {
-    // TODO: enum dispatch?
-    async fn resolve(&self) -> Result<EnvBuf> {
+    fn env_path_merge(primary: &impl envy::Get, secondary: &impl envy::Get) -> Option<PathEnv> {
+        let a = primary.get::<PathEnv>().ok();
+        let b = secondary.get::<PathEnv>().ok();
+
+        match (a, b) {
+            (Some(a), Some(b)) => Some(a + b),
+            (a, None) => a,
+            (None, b) => b,
+        }
+    }
+
+    pub async fn resolve_env(args: &Args) -> Result<EnvBuf> {
+        let mode = &args.env;
+
         let unix_env = OsEnv::new_view();
 
-        if matches!(self, EnvironmentResolution::Unix) {
+        if matches!(mode, Strategy::Unix) {
             return Ok(env_erase(unix_env));
         }
 
@@ -366,13 +370,13 @@ impl EnvironmentResolution {
             .await
             .context("Failed to connect to DBus (session bus)")?;
 
-        let systemd_env = SystemdEnvironment::open(&session_bus)
+        let systemd_env = systemd::dbus::environment::SystemdEnvironment::open(&session_bus)
             .await
             .context("Cannot resolve systemd environment")?;
 
         let path = env_path_merge(&systemd_env, &unix_env);
 
-        if matches!(self, EnvironmentResolution::Systemd) {
+        if matches!(mode, Strategy::Systemd) {
             let mut env = env_erase(systemd_env);
             env.apply(path);
             return Ok(env);
@@ -383,6 +387,15 @@ impl EnvironmentResolution {
         merged.apply(unix_env);
         merged.apply(path);
         Ok(merged)
+    }
+}
+
+#[cfg(not(feature = "dbus"))]
+mod resolve_env {
+    use super::*;
+
+    pub async fn resolve_env(_: &Args) -> Result<EnvBuf> {
+        Ok(env_erase(OsEnv::new_view()))
     }
 }
 
@@ -401,9 +414,10 @@ struct Args {
     #[argh(switch)]
     notify: bool,
 
+    #[cfg(feature = "dbus")]
     #[argh(option)]
     /// environment resolution strategy
-    env: EnvironmentResolution,
+    env: resolve_env::Strategy,
 
     #[argh(subcommand)]
     mode: ModeSubcommand,
@@ -425,10 +439,10 @@ fn _help_skip_locks() {
     )
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args: Args = argh::from_env();
-    let env = args.env.resolve().await?;
+    let env = resolve_env::resolve_env(&args).await?;
 
     // TODO: make this non-fatal, fallback to stderr
     journald::init_journald().context("Failed to initialize journald client")?;

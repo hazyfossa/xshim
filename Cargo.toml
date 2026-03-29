@@ -19,7 +19,9 @@ rustix = { version = "1.1.4", features = [
 ] }
 simple-eyre = "0.3.1"
 tokio = { version = "1.50.0", features = ["rt", "macros"] }
-zbus = { version = "5.14.0", default-features = false, features = ["tokio"] }
+zbus = { version = "5.14.0", default-features = false, features = [
+    "tokio",
+], optional = true }
 zeroize = { version = "1.8.2", features = ["derive"] }
 
 [profile.release]
@@ -30,5 +32,6 @@ codegen-units = 1
 panic = "abort"
 
 [features]
-default = ["session"]
+default = ["session", "dbus"]
 session = ["dep:freedesktop-session-parser"]
+dbus = ["dep:zbus"]
