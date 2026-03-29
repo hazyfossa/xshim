@@ -1,3 +1,4 @@
+mod context;
 mod env_definitions;
 mod runtime_dir;
 mod systemd;
@@ -22,9 +23,10 @@ use envy::{
     Get, OsEnv, Set, Unset, define_env,
     diff::{self, Diff},
 };
-use eyre::{Context, ContextCompat, Result, bail};
+use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result, bail};
 
 use crate::{
+    context::SessionContext,
     env_definitions::*,
     runtime_dir::RuntimeDirManager,
     systemd::{journald, notify::Notifier},
@@ -32,7 +34,6 @@ use crate::{
         fd::{CommandFdExt, FdContext, SimpleFdContext},
         path::EnsureExistsExt,
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
-        warn::WarnExt,
     },
     xauthority::{ClientAuthorityEnv, XAuthorityManager},
 };
@@ -78,26 +79,27 @@ fn spawn_server(
     path: &Path,
     extra_args: &Vec<String>,
     authority: PathBuf,
-    vt: VtNumber,
-    seat: Option<Seat>,
+    context: SessionContext,
 ) -> Result<(DisplayReceiver, ChildWithCleanup)> {
     let mut fd_context = FdContext::new(1);
 
     let mut command = Command::new(path);
 
-    if let Some(seat) = seat {
+    if let Some(seat) = context.seat {
         command.args(["-seat", &seat]);
     }
 
-    // TODO: is it still good practice to add -novtswitch
-    // even though xshim does not perform work on tty/vt
-    // and neither does it call logind
+    if let Some(vt) = context.vt_number {
+        command.arg(format!("vt{}", *vt));
+        // TODO: should keeptty be here or in global?
+        // read on tty control
+        command.args(["-keeptty", "-novtswitch"]);
+    }
 
     command
-        .arg(format!("vt{}", *vt))
         .args(["-auth".into(), authority])
         .args(["-nolisten", "tcp"])
-        .args(["-background", "none", "-noreset", "-keeptty", "-novtswitch"])
+        .args(["-background", "none", "-noreset"])
         .args(["-verbose", "3", "-logfile", "/dev/null"])
         .args(extra_args)
         .envs([("XORG_RUN_AS_USER_OK", "1")]); // TODO: relevant?
@@ -114,7 +116,7 @@ fn spawn_server(
 type ClientEnv = (
     Display,
     ClientAuthorityEnv,
-    WindowPath,
+    Option<WindowPath>,
     Unset<VtNumber>,
     Unset<Seat>,
 );
@@ -373,16 +375,13 @@ fn main() -> Result<()> {
     journald::init_journald().context("Failed to initialize journald client")?;
     simple_eyre::install()?;
 
-    // TODO: add an unsafe option to try and determine one anyway
-    let vt = env.get::<VtNumber>().context("Cannot find a VT number allocated for current session. Are you running this from a correct place?")?;
-
-    let seat = env
-        .get::<Seat>()
-        .context("Cannot find a seat for the current session")
-        .warn();
+    let context = context::xdg_env(&env).context("Failed to aqquire session context")?;
 
     // TODO: is this even relevant?
-    let window_path = WindowPath::previous_plus_vt(&env, &vt);
+    let window_path = context
+        .vt_number
+        .as_ref()
+        .map(|vt| WindowPath::previous_plus_vt(&env, vt));
 
     let mut notifier = match args.notify {
         true => Some(Notifier::from_env(&env).context("Failed to setup systemd notifications")?),
@@ -393,7 +392,7 @@ fn main() -> Result<()> {
         RuntimeDirManager::from_env(&env).context("Cannot setup runtime dir manager")?;
 
     let runtime_dir = rt_dir_manager
-        .create(&format!("xshim-{}", *vt))
+        .create(&format!("xshim-{}", context.unique_id()?))
         .context("Failed to create runtime directory")?;
 
     let authority_manager = XAuthorityManager::new(runtime_dir, args.skip_locks)
@@ -404,7 +403,7 @@ fn main() -> Result<()> {
         .context("Failed to define server authority")?;
 
     let (future_display, _xorg_child) =
-        spawn_server(&args.xorg_path, &args.xorg_args, server_authority, vt, seat)
+        spawn_server(&args.xorg_path, &args.xorg_args, server_authority, context)
             .context("Failed to spawn Xorg")?;
 
     let display = future_display.blocking_wait()?;
@@ -420,8 +419,9 @@ fn main() -> Result<()> {
         display,
         client_authority,
         window_path,
-        diff::unset(),
-        diff::unset(),
+        // TODO: unset should come from context
+        diff::unset::<VtNumber>(),
+        diff::unset::<Seat>(),
     ))?;
 
     if let Some(ref mut notifier) = notifier {

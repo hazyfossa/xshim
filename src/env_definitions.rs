@@ -48,8 +48,8 @@ impl WindowPath {
     pub fn previous_plus_vt(env: &impl envy::Get, vt: &VtNumber) -> Self {
         let previous = env.get::<Self>();
         Self(match previous {
-            Ok(path) => format!("{}:{}", path.0, vt.0),
-            Err(_) => vt.0.to_string(),
+            Ok(path) => format!("{}:{}", *path, **vt),
+            Err(_) => vt.to_string(),
         })
     }
 }
