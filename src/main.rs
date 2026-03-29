@@ -7,23 +7,20 @@ mod xauthority;
 
 use std::{
     env::home_dir,
-    ffi::OsStr,
-    io::{self, BufRead, BufReader, ErrorKind, PipeReader, pipe},
-    os::{
-        fd::AsRawFd,
-        unix::{ffi::OsStrExt, net::UnixDatagram},
-    },
+    fs,
+    io::{BufRead, BufReader, PipeReader, pipe},
+    os::{fd::AsRawFd, unix::fs::PermissionsExt},
     path::{Path, PathBuf},
-    process::{Command, ExitStatus},
+    process::Command,
 };
 
 use argh::FromArgs;
 use enum_dispatch::enum_dispatch;
 use envy::{
-    Get, OsEnv, Set, Unset,
+    Get, OsEnv, Set,
     container::EnvBuf,
     define_env,
-    diff::{self, Diff, Entry},
+    diff::{self, Diff},
 };
 use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result, bail};
 
@@ -37,7 +34,7 @@ use crate::{
         path::EnsureExistsExt,
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
     },
-    xauthority::{ClientAuthorityEnv, XAuthorityManager},
+    xauthority::XAuthorityManager,
 };
 
 // You may want to change this if you're making a package
@@ -115,42 +112,9 @@ fn spawn_server(
     Ok((display_rx, child))
 }
 
-type ClientEnv = (
-    Display,
-    ClientAuthorityEnv,
-    Option<WindowPath>,
-    Unset<VtNumber>,
-    Unset<Seat>,
-);
-
-enum Client {
-    Command(Command),
-    Process(Result<ChildWithCleanup, io::Error>),
-    None,
-}
-
-impl Client {
-    fn bind(self) -> Result<ExitStatus> {
-        match self {
-            // if provided a command, spawn a process
-            Client::Command(command) => {
-                let process = spawn_with_cleanup(command);
-                Self::Process(process).bind()
-            }
-            // if provided a process, wait on in
-            Client::Process(process) => Ok(process
-                .context("Failed to spawn client subprocess")?
-                .wait()
-                .unwrap()),
-            // if not dealing with processes, return successs
-            Client::None => Ok(ExitStatus::default()),
-        }
-    }
-}
-
 #[enum_dispatch]
 trait Mode {
-    fn run(self, x_env: ClientEnv) -> Result<Client>;
+    fn run(self) -> Result<Command>;
 }
 
 #[derive(FromArgs)]
@@ -163,11 +127,8 @@ struct DirectMode {
 }
 
 impl Mode for DirectMode {
-    fn run(self, x_env: ClientEnv) -> Result<Client> {
-        let mut command = Command::new(self.executable);
-        command.apply(x_env);
-
-        Ok(Client::Command(command))
+    fn run(self) -> Result<Command> {
+        Ok(Command::new(self.executable))
     }
 }
 
@@ -180,7 +141,7 @@ struct XinitCompatMode {}
 define_env!(pub XinitRC(PathBuf) = #raw "XINITRC");
 
 impl Mode for XinitCompatMode {
-    fn run(self, x_env: ClientEnv) -> Result<Client> {
+    fn run(self) -> Result<Command> {
         let rc_env = OsEnv::new_view().get::<XinitRC>().map(|var| var.0);
 
         let rc_user = || {
@@ -199,27 +160,24 @@ impl Mode for XinitCompatMode {
                 let mut xterm = Command::new("xterm");
                 xterm.args(["-geometry", "+1+1", "-n", "login"]);
 
-                return Ok(Client::Command(xterm));
+                return Ok(xterm);
             }
         };
 
-        let mut command = Command::new(&client_path);
-        command.apply(x_env.clone());
+        let permissions = fs::metadata(&client_path)
+            .context("Cannot find client executable")?
+            .permissions();
 
-        let client_process = match spawn_with_cleanup(command) {
-            Ok(process) => Ok(process),
-            // retry with shell
-            Err(e) if e.kind() != ErrorKind::PermissionDenied => {
-                let mut with_shell = Command::new("/bin/sh");
-                with_shell.arg(client_path);
-                with_shell.apply(x_env);
+        let is_executable = permissions.mode() & 0o111 != 0;
 
-                spawn_with_cleanup(with_shell)
+        Ok(match is_executable {
+            true => Command::new(client_path),
+            false => {
+                let mut shell = Command::new("/bin/sh");
+                shell.arg(client_path);
+                shell
             }
-            Err(other) => Err(other),
-        };
-
-        Ok(Client::Process(client_process))
+        })
     }
 }
 
@@ -236,7 +194,7 @@ pub struct SessionMode {
 
 #[cfg(feature = "session")]
 impl Mode for SessionMode {
-    fn run(self, x_env: ClientEnv) -> Result<Client> {
+    fn run(self) -> Result<Command> {
         use freedesktop_session_parser::{SessionKind, get_session_entry};
 
         let session = get_session_entry(SessionKind::X11, &self.name)
@@ -260,68 +218,16 @@ impl Mode for SessionMode {
             }
         };
 
-        command.apply(x_env);
-
-        Ok(Client::Command(command))
+        Ok(command)
     }
 }
 
-#[derive(FromArgs)]
-#[argh(subcommand, name = "xorg-delegate")]
-/// Delegate client lifecycle. Called by a cooperative session manager.
-struct DelegateMode {
-    /// use systemd socket activation
-    #[argh(switch)]
-    systemd: bool,
-
-    /// use socket on path
-    #[argh(option)]
-    path: Option<PathBuf>,
-}
-
-impl Mode for DelegateMode {
-    fn run(self, x_env: ClientEnv) -> Result<Client> {
-        if self.systemd && self.path.is_some() {
-            bail!("Conflicting options: specify either --systemd or --path, not both.")
-        };
-
-        let socket = match self.systemd {
-            // Safety: by setting --systemd the user guarantees the .socket unit to be a datagram socket
-            true => unsafe {
-                systemd::socket_activation::listen_fd_simple()
-                    .context("Failed to receive a socket from systemd")?
-            },
-            false => {
-                let path = self.path.context("Socket path not specified")?;
-                UnixDatagram::bind(&path).context(format!("Cannot bind to socket at {path:?}"))?
-            }
-        };
-
-        let msg = x_env
-            .to_env_diff()
-            .into_iter()
-            .filter_map(|entry| match entry {
-                Entry::Set { .. } => Some(entry.to_os_string()),
-                Entry::Unset { .. } => None,
-            })
-            .collect::<Vec<_>>()
-            .join(OsStr::new(";"));
-
-        socket
-            .send(msg.as_bytes())
-            .context("Failed to send environment data")?;
-
-        Ok(Client::None)
-    }
-}
-
+#[enum_dispatch(Mode)]
 #[derive(FromArgs)]
 #[argh(subcommand)]
-#[enum_dispatch(Mode)]
 enum ModeSubcommand {
     Direct(DirectMode),
     XinitCompat(XinitCompatMode),
-    Delegate(DelegateMode),
 
     #[cfg(feature = "session")]
     Session(SessionMode),
@@ -488,14 +394,18 @@ async fn main() -> Result<()> {
     // NOTE: RuntimeDir persists until main is closed
     let _persist = authority_manager.finish();
 
-    let client = args.mode.run((
+    let mut client = args.mode.run()?;
+
+    client.apply((
         display,
         client_authority,
         window_path,
         // TODO: unset should come from context
         diff::unset::<VtNumber>(),
         diff::unset::<Seat>(),
-    ))?;
+    ));
+
+    let mut client_child = spawn_with_cleanup(client).context("Failed to spawn client")?;
 
     if let Some(ref mut notifier) = notifier {
         notifier
@@ -505,7 +415,7 @@ async fn main() -> Result<()> {
 
     // TODO: is there a point in waiting on Xorg? Client should always close if XServer drops, right?
     // ...will systemd reap the zombie as part of session logout?
-    client.bind()?;
+    client_child.wait().unwrap();
 
     if let Some(ref mut notifier) = notifier {
         let _best_effort = notifier.notify_stopping();
