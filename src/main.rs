@@ -25,7 +25,7 @@ use envy::{
 use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result, bail};
 
 use crate::{
-    context::SessionContext,
+    context::{ContextMode, SessionContext},
     env_definitions::*,
     runtime_dir::RuntimeDirManager,
     systemd::{journald, notify::Notifier},
@@ -242,7 +242,7 @@ fn env_erase<T: Diff>(x: T) -> EnvBuf {
 mod resolve_env {
     use super::*;
 
-    #[derive(argh::FromArgValue)]
+    #[derive(argh::FromArgValue, Clone)]
     pub enum Strategy {
         /// use unix session environment (shell profile)
         Unix,
@@ -250,6 +250,12 @@ mod resolve_env {
         Systemd,
         /// merge systemd and unix environment. unix values take precedence
         Merge,
+    }
+
+    impl Default for Strategy {
+        fn default() -> Self {
+            Self::Systemd
+        }
     }
 
     fn env_path_merge(primary: &impl envy::Get, secondary: &impl envy::Get) -> Option<PathEnv> {
@@ -264,7 +270,7 @@ mod resolve_env {
     }
 
     pub async fn resolve_env(args: &Args) -> Result<EnvBuf> {
-        let mode = &args.env;
+        let mode = &args.env.clone().unwrap_or_default();
 
         let unix_env = OsEnv::new_view();
 
@@ -278,7 +284,7 @@ mod resolve_env {
 
         let systemd_env = systemd::dbus::environment::SystemdEnvironment::open(&session_bus)
             .await
-            .context("Cannot resolve systemd environment")?;
+            .context("Failed to query systemd for environment")?;
 
         let path = env_path_merge(&systemd_env, &unix_env);
 
@@ -312,6 +318,15 @@ struct Args {
     #[argh(option, default = "DEFAULT_XORG_PATH.into()")]
     xorg_path: PathBuf,
 
+    #[cfg(feature = "dbus")]
+    #[argh(option)]
+    /// environment resolution strategy
+    env: Option<resolve_env::Strategy>,
+
+    #[argh(option)]
+    /// session context
+    context: Option<ContextMode>,
+
     /// omit XAuthority locking (use at your own risk!)
     #[argh(switch)]
     skip_locks: bool,
@@ -319,11 +334,6 @@ struct Args {
     /// use systemd notifications
     #[argh(switch)]
     notify: bool,
-
-    #[cfg(feature = "dbus")]
-    #[argh(option)]
-    /// environment resolution strategy
-    env: resolve_env::Strategy,
 
     #[argh(subcommand)]
     mode: ModeSubcommand,
@@ -348,13 +358,17 @@ fn _help_skip_locks() {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args: Args = argh::from_env();
-    let env = resolve_env::resolve_env(&args).await?;
+    let env = resolve_env::resolve_env(&args)
+        .await
+        .context("Failed to resolve environment")?;
 
     // TODO: make this non-fatal, fallback to stderr
     journald::init_journald().context("Failed to initialize journald client")?;
     simple_eyre::install()?;
 
-    let context = context::xdg_env(&env).context("Failed to aqquire session context")?;
+    let context = context::aqquire(&args, &env)
+        .await
+        .context("Failed to aqquire session context")?;
 
     // TODO: is this even relevant?
     let window_path = context

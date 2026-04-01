@@ -1,7 +1,7 @@
 use envy::{define_env, parse::EnvironmentParse};
 
 define_env!(pub Seat(String) = "XDG_SEAT");
-define_env!(pub VtNumber(u8) = "XDG_VTNR");
+define_env!(pub VtNumber(u32) = "XDG_VTNR");
 
 define_env!(pub Display(u8) = #custom "DISPLAY");
 

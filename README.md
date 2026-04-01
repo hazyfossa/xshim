@@ -10,11 +10,11 @@ XShim is not:
 - An implementation/extension of X11 protocol.
 - A bridge between X11 and wayland (for that, see wayback, xwayland).
 
-# caveats
-One thing XShim can never polyfill is the logind session type, that is by design of systemd-logind. A high-level display manager sets this through PAM, and it is immutable afterwards. Note that this limitation is not exclusive to XShim. For example, startx sessions register as "tty".
 
 # todo
 - [ ] Examples of use
-- [+] Xinit compatibility mode
-- [+] Better systemd integration
+- [x] Xinit compatibility mode
+- [x] Better systemd integration
 - [ ] Parsing of Xorg logs into journald format
+- [x] Logind support
+- [ ] Seatd support
