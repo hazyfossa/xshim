@@ -1,4 +1,5 @@
 use argh::FromArgValue;
+use envy::{Get, OsEnv};
 use eyre::{Context, Result};
 use rustix::rand::{GetRandomFlags, getrandom};
 
@@ -46,7 +47,7 @@ pub enum ContextMode {
     // Like None, but pre-allocate a VT
     VtAlloc,
     // Use XDG environment variables
-    XDG,
+    Xdg,
     // Become a full logind session leader
     #[cfg(feature = "dbus")]
     Logind,
@@ -62,7 +63,7 @@ impl Default for ContextMode {
 #[cfg(not(feature = "dbus"))]
 impl Default for ContextMode {
     fn default() -> Self {
-        Self::XDG
+        Self::Xdg
     }
 }
 
@@ -71,6 +72,31 @@ fn alloc_vt() -> Result<VtNumber> {
 }
 
 // TODO: seatd support?
+// TODO: set XDG type?
+
+fn xdg() -> Result<SessionContext> {
+    // We use the system env here regardless of user setting
+    // for session env. This is not a mistake.
+    //
+    // The PAM stack will provide appropriate variables in
+    // unix env, not systemd env.
+    let env = OsEnv::new_view();
+
+    let vt_number = env.get::<VtNumber>().context(
+        "Cannot find a VT number allocated for current session. 
+                    Are you running this from a correct place?",
+    )?;
+
+    let seat = env
+        .get::<Seat>()
+        .context("Cannot find a seat for the current session")
+        .warn();
+
+    Ok(SessionContext {
+        seat,
+        vt_number: Some(vt_number),
+    })
+}
 
 #[cfg(feature = "dbus")]
 async fn logind_takeover() -> Result<SessionContext> {
@@ -125,7 +151,7 @@ async fn logind_takeover() -> Result<SessionContext> {
     })
 }
 
-pub async fn aqquire(args: &Args, env: &impl envy::Get) -> Result<SessionContext> {
+pub async fn aqquire(args: &Args) -> Result<SessionContext> {
     Ok(match args.context.clone().unwrap_or_default() {
         ContextMode::None => SessionContext {
             seat: None,
@@ -135,22 +161,7 @@ pub async fn aqquire(args: &Args, env: &impl envy::Get) -> Result<SessionContext
             seat: None,
             vt_number: Some(alloc_vt()?),
         },
-        ContextMode::XDG => {
-            let vt_number = env.get::<VtNumber>().context(
-                "Cannot find a VT number allocated for current session. 
-                    Are you running this from a correct place?",
-            )?;
-
-            let seat = env
-                .get::<Seat>()
-                .context("Cannot find a seat for the current session")
-                .warn();
-
-            SessionContext {
-                seat,
-                vt_number: Some(vt_number),
-            }
-        }
+        ContextMode::Xdg => xdg()?,
         #[cfg(feature = "dbus")]
         ContextMode::Logind => logind_takeover().await?,
     })

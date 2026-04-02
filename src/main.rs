@@ -366,7 +366,7 @@ async fn main() -> Result<()> {
     journald::init_journald().context("Failed to initialize journald client")?;
     simple_eyre::install()?;
 
-    let context = context::aqquire(&args, &env)
+    let context = context::aqquire(&args)
         .await
         .context("Failed to aqquire session context")?;
 
