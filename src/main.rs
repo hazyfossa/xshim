@@ -23,6 +23,7 @@ use envy::{
     diff::{self, Diff},
 };
 use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result, bail};
+use freedesktop_session_parser::{SessionKind, get_session_entry};
 
 use crate::{
     context::{ContextMode, SessionContext},
@@ -89,16 +90,13 @@ fn spawn_server(
     }
 
     if let Some(vt) = context.vt_number {
-        command.arg(format!("vt{}", *vt));
-        // TODO: should keeptty be here or in global?
-        // read on tty control
-        command.args(["-keeptty", "-novtswitch"]);
+        command.arg(format!("vt{}", *vt)).arg("-novtswitch");
     }
 
     command
         .args(["-auth".into(), authority])
         .args(["-nolisten", "tcp"])
-        .args(["-background", "none", "-noreset"])
+        .args(["-background", "none", "-noreset", "-keeptty"])
         .args(["-verbose", "3", "-logfile", "/dev/null"])
         .args(extra_args)
         .envs([("XORG_RUN_AS_USER_OK", "1")]); // TODO: relevant?
@@ -183,7 +181,6 @@ impl Mode for XinitCompatMode {
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "session")]
-#[cfg(feature = "session")]
 /// Run an xdg session. You should also consider running direct mode
 /// from a higher-level session manager.
 pub struct SessionMode {
@@ -192,11 +189,8 @@ pub struct SessionMode {
     name: String,
 }
 
-#[cfg(feature = "session")]
 impl Mode for SessionMode {
     fn run(self) -> Result<Command> {
-        use freedesktop_session_parser::{SessionKind, get_session_entry};
-
         let session = get_session_entry(SessionKind::X11, &self.name)
             .context("Error while reading session definition")?;
 
@@ -228,8 +222,6 @@ impl Mode for SessionMode {
 enum ModeSubcommand {
     Direct(DirectMode),
     XinitCompat(XinitCompatMode),
-
-    #[cfg(feature = "session")]
     Session(SessionMode),
 }
 
@@ -366,9 +358,11 @@ async fn main() -> Result<()> {
     journald::init_journald().context("Failed to initialize journald client")?;
     simple_eyre::install()?;
 
-    let context = context::aqquire(&args)
+    let mut context = context::aqquire(&args)
         .await
         .context("Failed to aqquire session context")?;
+
+    let context_env = context.env_diff.take();
 
     // TODO: is this even relevant?
     let window_path = context
@@ -418,6 +412,10 @@ async fn main() -> Result<()> {
         diff::unset::<VtNumber>(),
         diff::unset::<Seat>(),
     ));
+
+    if let Some(context_env) = context_env {
+        client.apply(context_env);
+    }
 
     let mut client_child = spawn_with_cleanup(client).context("Failed to spawn client")?;
 

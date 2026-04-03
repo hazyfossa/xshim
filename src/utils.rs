@@ -276,7 +276,7 @@ pub mod warn {
     // which already necessitates some sort of string lookup before we even started writing
     #[macro_export]
     macro_rules! warn {
-        ($($tt:tt)?) => {
+        ($($tt:tt)*) => {
             let _ = $crate::systemd::journald::log($
                 crate::systemd::journald::LogLevel::Warning,
                 &format!($($tt)?)

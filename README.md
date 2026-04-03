@@ -16,5 +16,3 @@ XShim is not:
 - [x] Xinit compatibility mode
 - [x] Better systemd integration
 - [ ] Parsing of Xorg logs into journald format
-- [x] Logind support
-- [ ] Seatd support

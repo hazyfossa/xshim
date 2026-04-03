@@ -1,17 +1,21 @@
 use argh::FromArgValue;
-use envy::{Get, OsEnv};
+use envy::{EnvVariable, Get, OsEnv, Set, container::EnvBuf, diff::Diff};
 use eyre::{Context, Result};
+use freedesktop_session_parser::SessionKind;
 use rustix::rand::{GetRandomFlags, getrandom};
 
 use crate::{
     Args,
     env_definitions::{Seat, VtNumber},
     utils::warn::WarnExt,
+    warn,
 };
 
+#[derive(Default)]
 pub struct SessionContext {
     pub seat: Option<Seat>,
     pub vt_number: Option<VtNumber>,
+    pub env_diff: Option<EnvBuf>,
 }
 
 impl SessionContext {
@@ -48,19 +52,8 @@ pub enum ContextMode {
     VtAlloc,
     // Use XDG environment variables
     Xdg,
-    // Become a full logind session leader
-    #[cfg(feature = "dbus")]
-    Logind,
 }
 
-#[cfg(feature = "dbus")]
-impl Default for ContextMode {
-    fn default() -> Self {
-        Self::Logind
-    }
-}
-
-#[cfg(not(feature = "dbus"))]
 impl Default for ContextMode {
     fn default() -> Self {
         Self::Xdg
@@ -80,11 +73,11 @@ fn xdg() -> Result<SessionContext> {
     //
     // The PAM stack will provide appropriate variables in
     // unix env, not systemd env.
-    let env = OsEnv::new_view();
+    let mut env = OsEnv::new_view();
 
     let vt_number = env.get::<VtNumber>().context(
         "Cannot find a VT number allocated for current session. 
-                    Are you running this from a correct place?",
+Are you running this from a correct place?",
     )?;
 
     let seat = env
@@ -92,77 +85,42 @@ fn xdg() -> Result<SessionContext> {
         .context("Cannot find a seat for the current session")
         .warn();
 
+    match env.get::<SessionKind>() {
+        Ok(SessionKind::X11) => (),
+        Ok(other) => {
+            warn!(
+                "{} variable is incorrect: expected '{}', got '{}'.
+                Logind will register this session as wrong type.
+                You should set this variable via your session manager.
+                ",
+                SessionKind::KEY,
+                SessionKind::X11,
+                other
+            );
+        }
+
+        Err(envy::Error::NoneError { .. }) => env.set(SessionKind::X11),
+        Err(other) => {
+            warn!("{other}");
+        }
+    }
+
     Ok(SessionContext {
         seat,
         vt_number: Some(vt_number),
-    })
-}
-
-#[cfg(feature = "dbus")]
-async fn logind_takeover() -> Result<SessionContext> {
-    use crate::systemd::dbus::logind::{LoginManagerProxy, SessionProxy};
-
-    let dbus = zbus::Connection::system()
-        .await
-        .context("Failed to connect to DBus (system bus)")?;
-
-    let logind = LoginManagerProxy::new(&dbus)
-        .await
-        .context("Failed to connect to logind")?;
-
-    let pid_self = rustix::process::getpid().as_raw_pid();
-
-    let session_path = logind
-        .get_session_by_pid(
-            pid_self
-                .try_into()
-                .context("Unusual PID of current process, cannot pass to logind")?,
-        )
-        .await
-        .context("Logind query failed: is xshim running in an existing session?")?;
-
-    let session = SessionProxy::builder(&dbus)
-        .path(session_path)
-        .context("Logind provided invalid dbus path")?
-        .build()
-        .await
-        .context("Failed to interact with session over DBus")?;
-
-    // what does `force` mean here?
-    session
-        .take_control(false)
-        .await
-        .context("Failed to take control of the session")?;
-
-    let (seat, _dbus_path) = session.seat().await.context("Failed to query seat")?;
-    let vt = session.vtnr().await.context("Failed to query VT number")?;
-
-    session
-        .set_type("x11")
-        .await
-        .context("Failed to set session type")?;
-
-    // TODO:
-    // session.set_display(display)
-
-    Ok(SessionContext {
-        seat: Some(seat.into()),
-        vt_number: Some(vt.into()),
+        env_diff: Some(EnvBuf::from_entries(env.to_env_diff())),
     })
 }
 
 pub async fn aqquire(args: &Args) -> Result<SessionContext> {
     Ok(match args.context.clone().unwrap_or_default() {
-        ContextMode::None => SessionContext {
-            seat: None,
-            vt_number: None,
-        },
+        ContextMode::None => SessionContext::default(),
+
         ContextMode::VtAlloc => SessionContext {
-            seat: None,
             vt_number: Some(alloc_vt()?),
+            ..Default::default()
         },
+
         ContextMode::Xdg => xdg()?,
-        #[cfg(feature = "dbus")]
-        ContextMode::Logind => logind_takeover().await?,
     })
 }

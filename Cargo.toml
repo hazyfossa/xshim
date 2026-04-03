@@ -25,13 +25,11 @@ zbus = { version = "5.14.0", default-features = false, features = [
 zeroize = { version = "1.8.2", features = ["derive"] }
 
 [profile.release]
-opt-level = "s"
-strip = true
+opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
 
 [features]
-default = ["session", "dbus"]
-session = ["dep:freedesktop-session-parser"]
+default = ["dbus"]
 dbus = ["dep:zbus"]
