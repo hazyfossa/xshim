@@ -1,4 +1,5 @@
 use envy::{define_env, parse::EnvironmentParse};
+use std::collections::HashSet;
 
 define_env!(pub Seat(String) = "XDG_SEAT");
 define_env!(pub VtNumber(u32) = "XDG_VTNR");
@@ -54,14 +55,26 @@ impl WindowPath {
     }
 }
 
-define_env!(pub PathEnv(String) = "PATH");
+define_env!(pub PathEnv(Vec<String>) = #custom "PATH");
+
+impl EnvironmentParse<String> for PathEnv {
+    type Error = std::convert::Infallible;
+
+    fn env_serialize(self) -> String {
+        self.0.join(":")
+    }
+
+    fn env_deserialize(value: String) -> Result<Self, Self::Error> {
+        let values = value.split(':').map(|s| s.to_string()).collect();
+        Ok(Self(values))
+    }
+}
 
 impl std::ops::Add for PathEnv {
     type Output = PathEnv;
 
     fn add(self, rhs: Self) -> Self::Output {
-        let a = self.0;
-        let b = rhs.0;
-        PathEnv([a, b].join(":"))
+        let set: HashSet<String> = self.0.into_iter().chain(rhs.0.into_iter()).collect();
+        PathEnv(set.into_iter().collect())
     }
 }

@@ -1,5 +1,5 @@
 use argh::FromArgValue;
-use envy::{EnvVariable, Get, OsEnv, Set, container::EnvBuf, diff::Diff};
+use envy::{EnvVariable, Get, OsEnv, Set, container::EnvBuf};
 use eyre::{Context, Result};
 use freedesktop_session_parser::SessionKind;
 use rustix::rand::{GetRandomFlags, getrandom};
@@ -108,7 +108,7 @@ Are you running this from a correct place?",
     Ok(SessionContext {
         seat,
         vt_number: Some(vt_number),
-        env_diff: Some(EnvBuf::from_entries(env.to_env_diff())),
+        env_diff: Some(EnvBuf::from_diff(env)),
     })
 }
 

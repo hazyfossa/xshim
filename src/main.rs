@@ -16,12 +16,7 @@ use std::{
 
 use argh::FromArgs;
 use enum_dispatch::enum_dispatch;
-use envy::{
-    Get, OsEnv, Set,
-    container::EnvBuf,
-    define_env,
-    diff::{self, Diff},
-};
+use envy::{Get, OsEnv, Set, container::EnvBuf, define_env, diff};
 use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result, bail};
 use freedesktop_session_parser::{SessionKind, get_session_entry};
 
@@ -99,7 +94,7 @@ fn spawn_server(
         .args(["-background", "none", "-noreset", "-keeptty"])
         .args(["-verbose", "3", "-logfile", "/dev/null"])
         .args(extra_args)
-        .envs([("XORG_RUN_AS_USER_OK", "1")]); // TODO: relevant?
+        .envs([("XORG_RUN_AS_USER_OK", "1")]);
 
     let display_rx = DisplayReceiver::setup(&mut fd_context, &mut command)?;
     command.with_fd_context(fd_context);
@@ -225,11 +220,6 @@ enum ModeSubcommand {
     Session(SessionMode),
 }
 
-// TODO: merge into envy?
-fn env_erase<T: Diff>(x: T) -> EnvBuf {
-    EnvBuf::from_entries(x.to_env_diff())
-}
-
 #[cfg(feature = "dbus")]
 mod resolve_env {
     use super::*;
@@ -267,7 +257,7 @@ mod resolve_env {
         let unix_env = OsEnv::new_view();
 
         if matches!(mode, Strategy::Unix) {
-            return Ok(env_erase(unix_env));
+            return Ok(EnvBuf::from_diff(unix_env));
         }
 
         let session_bus = zbus::Connection::session()
@@ -281,7 +271,7 @@ mod resolve_env {
         let path = env_path_merge(&systemd_env, &unix_env);
 
         if matches!(mode, Strategy::Systemd) {
-            let mut env = env_erase(systemd_env);
+            let mut env = EnvBuf::from_diff(systemd_env);
             env.apply(path);
             return Ok(env);
         };
@@ -299,7 +289,7 @@ mod resolve_env {
     use super::*;
 
     pub async fn resolve_env(_: &Args) -> Result<EnvBuf> {
-        Ok(env_erase(OsEnv::new_view()))
+        Ok(EnvBuf::from_diff(OsEnv::new_view()))
     }
 }
 
@@ -364,7 +354,6 @@ async fn main() -> Result<()> {
 
     let context_env = context.env_diff.take();
 
-    // TODO: is this even relevant?
     let window_path = context
         .vt_number
         .as_ref()
@@ -408,7 +397,6 @@ async fn main() -> Result<()> {
         display,
         client_authority,
         window_path,
-        // TODO: unset should come from context
         diff::unset::<VtNumber>(),
         diff::unset::<Seat>(),
     ));

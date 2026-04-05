@@ -199,7 +199,7 @@ dependencies = [
 [[package]]
 name = "envy"
 version = "0.1.0"
-source = "git+https://github.com/hazyfossa/envy.git#4a83087684aed40d4d5692e32ef836aacefdad4b"
+source = "git+https://github.com/hazyfossa/envy.git#1276afe62805e7e3e7bb32c1fe1999fea46a0b44"
 dependencies = [
  "snafu",
 ]
@@ -253,9 +253,9 @@ dependencies = [
 
 [[package]]
 name = "fastrand"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
+checksum = "a043dc74da1e37d6afe657061213aa6f425f855399a11d3463c6ecccc4dfda1f"
 
 [[package]]
 name = "foldhash"
@@ -532,9 +532,9 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "semver"
-version = "1.0.27"
+version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
+checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "serde"
