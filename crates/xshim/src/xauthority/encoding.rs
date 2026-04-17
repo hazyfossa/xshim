@@ -1,4 +1,3 @@
-pub use binrw::BinWrite;
 use binrw::binrw;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -39,7 +38,7 @@ pub struct Entry {
     #[bw(calc = {bound_len(&display, "display")?})]
     display_len: u16,
     #[br(count = display_len)]
-    pub display: Vec<u8>,
+    pub display: Vec<u16>,
 
     #[bw(calc = {bound_len(&name, "name")?})]
     name_len: u16,
@@ -53,12 +52,11 @@ pub struct Entry {
 }
 
 pub enum Target {
-    // u8 (256 cookies / displays) is an arbitrary but reasonable limit
-    Server { slot: u8 },
-    Client { display_number: u8 },
+    Server { slot: u16 },
+    Client { display_number: u16 },
 }
 
-impl From<Target> for u8 {
+impl From<Target> for u16 {
     fn from(value: Target) -> Self {
         match value {
             Target::Server { slot } => slot,
@@ -88,29 +86,29 @@ impl From<Scope> for (Family, Hostname) {
 pub struct Cookie([u8; Self::BYTES_LEN]);
 impl Cookie {
     pub const BYTES_LEN: usize = 16; // 16 * 8 = 128 random bits
-    const AUTH_NAME: &str = "MIT-MAGIC-COOKIE-1";
+    pub const AUTH_NAME: &str = "MIT-MAGIC-COOKIE-1";
 
     pub fn new(random_bytes: [u8; Self::BYTES_LEN]) -> Self {
         Self(random_bytes)
     }
 
-    pub fn raw_data(&self) -> (Vec<u8>, Vec<u8>) {
-        (Self::AUTH_NAME.into(), self.0.into())
+    pub fn raw_data(&self) -> Vec<u8> {
+        self.0.into()
     }
 }
 
 impl Entry {
     pub fn new(cookie: &Cookie, scope: Scope, target: Target) -> Entry {
         let (family, address) = scope.into();
-        let display = vec![target.into()];
-        let (name, data) = cookie.raw_data();
 
         Entry {
             family,
             address,
-            display,
-            name,
-            data,
+            display: vec![target.into()],
+            name: Cookie::AUTH_NAME.into(),
+            data: cookie.raw_data(),
         }
     }
 }
+
+// TODO: test coverage

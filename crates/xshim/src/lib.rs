@@ -6,11 +6,10 @@ use std::{
 };
 
 use bon::Builder;
-use envy::{OsEnv, container::EnvBuf};
+use envy::{OsEnv, container::EnvBuf, define_env};
 use eyre::{Context, Result, bail};
 
 use crate::{
-    env::{Display, WindowPath},
     utils::{
         fd::{CommandFdExt, FdContext, SimpleFdContext},
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
@@ -18,9 +17,11 @@ use crate::{
     xauthority::XAuthorityManager,
 };
 
-mod env;
 mod utils;
 mod xauthority;
+
+#[cfg(feature = "xrdb")]
+mod xrdb;
 
 pub use utils::subprocess;
 
@@ -29,6 +30,26 @@ const DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 
 pub type Seat = String;
 pub type VtNumber = u32;
+
+define_env!(pub Display(u16) = "DISPLAY");
+
+impl Display {
+    pub fn number(&self) -> u16 {
+        self.0
+    }
+}
+
+define_env!(WindowPath(String) = "WINDOWPATH");
+
+impl WindowPath {
+    pub fn previous_plus_vt(env: &impl envy::Get, vt: &VtNumber) -> Self {
+        let previous = env.get::<Self>();
+        Self(match previous {
+            Ok(path) => format!("{}:{}", *path, *vt),
+            Err(_) => vt.to_string(),
+        })
+    }
+}
 
 struct DisplayReceiver(PipeReader);
 
@@ -53,15 +74,15 @@ impl DisplayReceiver {
             .context("Failed to read display number")?;
 
         if display_buf.is_empty() {
-            bail!("Internal Xorg error. See logs above for details.")
+            bail!("Internal Xorg error")
         }
 
         let display_number = display_buf
             .trim_end()
-            .parse()
+            .parse::<u16>()
             .context("Xorg provided invalid display number")?;
 
-        Ok(Display::from_number(display_number))
+        Ok(Display::from(display_number))
     }
 }
 
@@ -106,11 +127,13 @@ pub struct Settings {
     vt: Option<VtNumber>,
     #[builder(into)]
     seat: Option<Seat>,
-
     #[builder(default)]
     extra_args: Vec<String>,
     #[builder(default = false)]
     unsafe_skip_locks: bool,
+
+    #[cfg(feature = "xrdb")]
+    resources: Option<Vec<PathBuf>>,
 }
 
 /// Returns (xorg_child, client_env)
@@ -137,6 +160,8 @@ pub fn setup_xorg(settings: Settings) -> Result<(ChildWithCleanup, impl envy::di
         .setup_client(&display)
         .context("Failed to define client authority")?;
 
+    let cookie = authority_manager.finalize_into_cookie();
+
     // TODO: we only use this for WindowPath. Is it even relevant?
     let env = settings.env.unwrap_or(EnvBuf::from_diff(OsEnv::new_view()));
 
@@ -144,6 +169,13 @@ pub fn setup_xorg(settings: Settings) -> Result<(ChildWithCleanup, impl envy::di
         .vt
         .as_ref()
         .map(|vt| WindowPath::previous_plus_vt(&env, vt));
+
+    #[cfg(feature = "xrdb")]
+    if let Some(resources) = settings.resources {
+        xrdb::load_resources(&display, &cookie, resources).context("Failed to load resources")?;
+    };
+
+    drop(cookie);
 
     let client_env = (display, client_authority, window_path);
 

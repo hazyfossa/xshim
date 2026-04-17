@@ -1,5 +1,5 @@
 mod encoding;
-use encoding::*;
+pub use encoding::*;
 
 mod file;
 use eyre::{Context, Result};
@@ -16,7 +16,7 @@ use rustix::{
     system::uname,
 };
 
-use crate::env::Display;
+use crate::Display;
 
 define_env!(pub ClientAuthorityEnv(PathBuf) = #raw "XAUTHORITY");
 
@@ -112,5 +112,9 @@ impl XAuthorityManager {
         xauth_file.set(authority)?;
 
         Ok(ClientAuthorityEnv(path))
+    }
+
+    pub fn finalize_into_cookie(self) -> Cookie {
+        self.cookie
     }
 }

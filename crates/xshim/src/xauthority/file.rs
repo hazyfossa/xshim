@@ -1,4 +1,4 @@
-use super::encoding::{BinWrite, Entry};
+use super::encoding::Entry;
 
 use std::{
     fs::{File, OpenOptions},
@@ -7,6 +7,7 @@ use std::{
     path::Path,
 };
 
+use binrw::BinWrite;
 use eyre::{Context, Result};
 use lock::Lock;
 
