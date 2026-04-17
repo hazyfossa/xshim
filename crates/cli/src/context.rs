@@ -1,15 +1,13 @@
 use argh::FromArgValue;
-use envy::{EnvVariable, Get, OsEnv, Set, container::EnvBuf};
+use envy::{EnvVariable, Get, OsEnv, Set, container::EnvBuf, define_env};
 use eyre::{Context, Result};
 use freedesktop_session_parser::SessionKind;
 use rustix::rand::{GetRandomFlags, getrandom};
 
-use crate::{
-    Args,
-    env_definitions::{Seat, VtNumber},
-    utils::warn::WarnExt,
-    warn,
-};
+use crate::{Args, utils::warn::WarnExt, warn};
+
+define_env!(pub Seat(String) = "XDG_SEAT");
+define_env!(pub VtNumber(u32) = "XDG_VTNR");
 
 #[derive(Default)]
 pub struct SessionContext {

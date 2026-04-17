@@ -1,0 +1,30 @@
+[package]
+name = "xshim-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+argh = { version = "0.1.16", default-features = false, features = ["help"] }
+binrw = "0.15.1"
+enum_dispatch = "0.3.13"
+envy = { git = "https://github.com/hazyfossa/envy.git", version = "0.1.0" }
+eyre = "0.6.12"
+freedesktop-session-parser = { git = "https://github.com/hazyfossa/freedesktop-session-parser", version = "0.1.0" }
+rustix = { version = "1.1.4", features = [
+    "fs",
+    "net",
+    "process",
+    "rand",
+    "system",
+] }
+simple-eyre = "0.3.1"
+tokio = { version = "1.50.0", features = ["rt", "macros"] }
+xshim = { version = "0.1.0", path = "../xshim" }
+zbus = { version = "5.14.0", default-features = false, features = [
+    "tokio",
+], optional = true }
+zeroize = { version = "1.8.2", features = ["derive"] }
+
+[features]
+default = ["dbus"]
+dbus = ["dep:zbus"]

@@ -77,7 +77,7 @@ impl EnvContainer for SystemdEnvironment {
 
 impl Diff for SystemdEnvironment {
     fn to_env_diff(self) -> impl IntoIterator<Item = Entry> {
-        self.buf.to_env_diff()
+        self.buf.into_diff()
     }
 }
 

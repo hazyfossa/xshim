@@ -16,7 +16,7 @@ use rustix::{
     system::uname,
 };
 
-use crate::{Display, runtime_dir::RuntimeDir};
+use crate::env::Display;
 
 define_env!(pub ClientAuthorityEnv(PathBuf) = #raw "XAUTHORITY");
 
@@ -35,13 +35,13 @@ fn get_hostname() -> Hostname {
 // Are there any side-effects? What breaks?
 pub struct XAuthorityManager {
     skip_locks: bool,
-    runtime_dir: RuntimeDir,
+    runtime_dir: PathBuf,
     cookie: Cookie,
     hostname: Hostname,
 }
 
 impl XAuthorityManager {
-    pub fn new(runtime_dir: RuntimeDir, skip_locks: bool) -> Result<Self> {
+    pub fn new(runtime_dir: PathBuf, skip_locks: bool) -> Result<Self> {
         let cookie = make_cookie()?;
         let hostname = get_hostname();
 
@@ -112,9 +112,5 @@ impl XAuthorityManager {
         xauth_file.set(authority)?;
 
         Ok(ClientAuthorityEnv(path))
-    }
-
-    pub fn finish(self) -> RuntimeDir {
-        self.runtime_dir
     }
 }

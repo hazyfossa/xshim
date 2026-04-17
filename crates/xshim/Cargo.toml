@@ -1,0 +1,12 @@
+[package]
+name = "xshim"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+binrw = "0.15.1"
+bon = "3.9.1"
+envy = { git = "https://github.com/hazyfossa/envy.git", version = "0.1.0" }
+eyre = "0.6.12"
+rustix = { version = "1.1.4", features = ["process", "rand", "system"] }
+zeroize = { version = "1.8.2", features = ["derive"] }
