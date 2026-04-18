@@ -14,16 +14,16 @@ use crate::{
         fd::{CommandFdExt, FdContext, SimpleFdContext},
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
     },
-    xauthority::XAuthorityManager,
+    xauthority::{ClientAuthorityEnv, XAuthorityManager},
 };
 
 mod utils;
+pub use utils::subprocess;
+
 mod xauthority;
 
-#[cfg(feature = "xrdb")]
-mod xrdb;
-
-pub use utils::subprocess;
+#[cfg(feature = "connection")]
+pub use x11rb::rust_connection::RustConnection as XConnection;
 
 // You may want to change this if you're making a package
 const DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
@@ -39,7 +39,7 @@ impl Display {
     }
 }
 
-define_env!(WindowPath(String) = "WINDOWPATH");
+define_env!(pub WindowPath(String) = "WINDOWPATH");
 
 impl WindowPath {
     pub fn previous_plus_vt(env: &impl envy::Get, vt: &VtNumber) -> Self {
@@ -116,6 +116,33 @@ fn prepare_xorg(
     Ok((display_rx, command))
 }
 
+#[cfg(feature = "connection")]
+fn xorg_connection(display: &Display, cookie: &xauthority::Cookie) -> Result<XConnection> {
+    use eyre::OptionExt;
+    use x11rb::reexports::x11rb_protocol::parse_display::ParsedDisplay;
+    use x11rb::rust_connection::DefaultStream;
+
+    let display = ParsedDisplay {
+        host: "".into(), // Use hostname from XAuthorityManager?
+        protocol: None,
+        display: **display,
+        screen: 0,
+    };
+
+    let conn = display.connect_instruction().find_map(|c| {
+        let (stream, _) = DefaultStream::connect(&c).ok()?;
+        XConnection::connect_to_stream_with_auth_info(
+            stream,
+            0,
+            xauthority::Cookie::AUTH_NAME.into(),
+            cookie.raw_data(),
+        )
+        .ok()
+    });
+
+    conn.ok_or_eyre("Failed to connect to Xorg")
+}
+
 #[derive(Builder)]
 pub struct Settings {
     authority_dir: PathBuf,
@@ -136,13 +163,20 @@ pub struct Settings {
     resources: Option<Vec<PathBuf>>,
 }
 
+pub struct XShim {
+    pub xorg_child: ChildWithCleanup,
+    pub client_env: (Display, ClientAuthorityEnv, Option<WindowPath>),
+    #[cfg(feature = "client")]
+    pub connection: x11rb::rust_connection::RustConnection,
+}
+
 /// Returns (xorg_child, client_env)
 /// Will block the current thread until Xorg provides a display
 ///
 /// Should be called from the context of the session user, *not* the root user
 /// (Xorg as root is discouraged)
 // TODO: optionally switch user on spawn
-pub fn setup_xorg(settings: Settings) -> Result<(ChildWithCleanup, impl envy::diff::Diff)> {
+pub fn setup_xorg(settings: Settings) -> Result<XShim> {
     let authority_manager =
         XAuthorityManager::new(settings.authority_dir.clone(), settings.unsafe_skip_locks)
             .context("Cannot setup XAuthority manager")?;
@@ -152,7 +186,7 @@ pub fn setup_xorg(settings: Settings) -> Result<(ChildWithCleanup, impl envy::di
         .context("Failed to define server authority")?;
 
     let (future_display, xorg_command) = prepare_xorg(&settings, server_authority)?;
-    let xorg = spawn_with_cleanup(xorg_command).context("Failed to spawn Xorg")?;
+    let xorg_child = spawn_with_cleanup(xorg_command).context("Failed to spawn Xorg")?;
 
     let display = future_display.blocking_wait()?;
 
@@ -170,14 +204,19 @@ pub fn setup_xorg(settings: Settings) -> Result<(ChildWithCleanup, impl envy::di
         .as_ref()
         .map(|vt| WindowPath::previous_plus_vt(&env, vt));
 
-    #[cfg(feature = "xrdb")]
-    if let Some(resources) = settings.resources {
-        xrdb::load_resources(&display, &cookie, resources).context("Failed to load resources")?;
-    };
+    #[cfg(feature = "connection")]
+    let connection = xorg_connection(&display, &cookie)?;
+
+    // TODO: xrdb
 
     drop(cookie);
 
-    let client_env = (display, client_authority, window_path);
+    Ok(XShim {
+        xorg_child,
+        client_env: (display, client_authority, window_path),
 
-    Ok((xorg, client_env))
+        // returns the connection if "client" feature is toggled, drops otherwise
+        #[cfg(feature = "client")]
+        connection,
+    })
 }

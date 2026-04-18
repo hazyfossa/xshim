@@ -215,7 +215,7 @@ async fn main() -> Result<()> {
         .create(&format!("xshim-{}", context.unique_id()?))
         .context("Failed to create runtime directory")?;
 
-    let (_xorg_child, client_env) = xshim::setup_xorg(
+    let xshim = xshim::setup_xorg(
         xshim::Settings::builder()
             .env(env)
             .maybe_path(args.xorg_path)
@@ -231,7 +231,7 @@ async fn main() -> Result<()> {
     let mut client = args.mode.run()?;
 
     client.apply((
-        client_env,
+        xshim.client_env,
         (diff::unset::<VtNumber>(), diff::unset::<Seat>()),
     ));
 
