@@ -17,17 +17,17 @@ pub struct AuthorityFile {
 }
 
 impl AuthorityFile {
-    fn create_inner(path: &Path) -> io::Result<File> {
+    fn open_inner(path: &Path) -> io::Result<File> {
         OpenOptions::new()
             .read(true)
             .write(true)
+            .create(true)
             .mode(0o600)
-            .create_new(true)
             .open(path)
     }
 
-    pub fn create(path: &Path) -> io::Result<Self> {
-        let file = Self::create_inner(path)?;
+    pub fn open_or_create(path: &Path) -> io::Result<Self> {
+        let file = Self::open_inner(path)?;
         let lock = Lock::aqquire(path)?;
 
         Ok(Self {
@@ -38,8 +38,8 @@ impl AuthorityFile {
 
     /// # Safety
     /// the caller should ensure no other process will open the same path
-    pub unsafe fn create_unlocked(path: &Path) -> io::Result<Self> {
-        let file = Self::create_inner(path)?;
+    pub unsafe fn open_or_create_unlocked(path: &Path) -> io::Result<Self> {
+        let file = Self::open_inner(path)?;
         Ok(Self { file, _lock: None })
     }
 

@@ -12,6 +12,7 @@ use eyre::{Context, Result, bail};
 use crate::{
     utils::{
         fd::{CommandFdExt, FdContext, SimpleFdContext},
+        private_file::SealedPrivateFile,
         subprocess::{ChildWithCleanup, spawn_with_cleanup},
     },
     xauthority::{ClientAuthorityEnv, XAuthorityManager},
@@ -88,9 +89,11 @@ impl DisplayReceiver {
 
 fn prepare_xorg(
     settings: &Settings,
-    server_authority: PathBuf,
+    server_authority: SealedPrivateFile,
 ) -> Result<(DisplayReceiver, Command)> {
-    let mut fd_context = FdContext::new(1);
+    let mut fd_context = FdContext::new(2);
+
+    let server_authority = fd_context.pass(server_authority.into_inner())?;
 
     let mut command = Command::new(&settings.path);
 
@@ -103,7 +106,7 @@ fn prepare_xorg(
     }
 
     command
-        .args(["-auth".into(), server_authority])
+        .args(["-auth".into(), server_authority.path()])
         .args(["-nolisten", "tcp"])
         .args(["-background", "none", "-noreset", "-keeptty"])
         .args(["-verbose", "3", "-logfile", "/dev/null"])
@@ -145,7 +148,6 @@ fn xorg_connection(display: &Display, cookie: &xauthority::Cookie) -> Result<XCo
 
 #[derive(Builder)]
 pub struct Settings {
-    authority_dir: PathBuf,
     #[builder(default = DEFAULT_XORG_PATH.into())]
     path: PathBuf,
     env: Option<EnvBuf>,
@@ -154,8 +156,10 @@ pub struct Settings {
     vt: Option<VtNumber>,
     #[builder(into)]
     seat: Option<Seat>,
+
     #[builder(default)]
     extra_args: Vec<String>,
+    xauthority_path: Option<PathBuf>,
     #[builder(default = false)]
     unsafe_skip_locks: bool,
 
@@ -176,9 +180,14 @@ pub struct XShim {
 /// Should be called from the context of the session user, *not* the root user
 /// (Xorg as root is discouraged)
 // TODO: optionally switch user on spawn
-pub fn setup_xorg(settings: Settings) -> Result<XShim> {
+pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
+    let env = settings
+        .env
+        .take()
+        .unwrap_or(EnvBuf::from_diff(OsEnv::new_view()));
+
     let authority_manager =
-        XAuthorityManager::new(settings.authority_dir.clone(), settings.unsafe_skip_locks)
+        XAuthorityManager::new(settings.unsafe_skip_locks, &settings.xauthority_path, &env)
             .context("Cannot setup XAuthority manager")?;
 
     let server_authority = authority_manager
@@ -195,9 +204,6 @@ pub fn setup_xorg(settings: Settings) -> Result<XShim> {
         .context("Failed to define client authority")?;
 
     let cookie = authority_manager.finalize_into_cookie();
-
-    // TODO: we only use this for WindowPath. Is it even relevant?
-    let env = settings.env.unwrap_or(EnvBuf::from_diff(OsEnv::new_view()));
 
     let window_path = settings
         .vt
@@ -219,4 +225,8 @@ pub fn setup_xorg(settings: Settings) -> Result<XShim> {
         #[cfg(feature = "client")]
         connection,
     })
+}
+
+pub fn setup_xorg() -> Result<XShim> {
+    setup_xorg_with_settings(Settings::builder().build())
 }

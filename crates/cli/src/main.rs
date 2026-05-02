@@ -13,7 +13,7 @@ use freedesktop_session_parser::{SessionKind, get_session_entry};
 use crate::{
     context::{ContextMode, Seat, VtNumber},
     systemd::{journald, notify::Notifier},
-    utils::{path::EnsureExistsExt, runtime_dir::RuntimeDirManager},
+    utils::path::EnsureExistsExt,
 };
 
 #[enum_dispatch]
@@ -207,19 +207,10 @@ async fn main() -> Result<()> {
         false => None,
     };
 
-    let rt_dir_manager =
-        RuntimeDirManager::from_env(&env).context("Cannot setup runtime dir manager")?;
-
-    // NOTE: RuntimeDir persists until main is closed
-    let runtime_dir = rt_dir_manager
-        .create(&format!("xshim-{}", context.unique_id()?))
-        .context("Failed to create runtime directory")?;
-
-    let xshim = xshim::setup_xorg(
+    let xshim = xshim::setup_xorg_with_settings(
         xshim::Settings::builder()
             .env(env)
             .maybe_path(args.xorg_path)
-            .authority_dir(runtime_dir.path.clone())
             .extra_args(args.xorg_args)
             .maybe_vt(context.vt_number)
             .maybe_seat(context.seat)

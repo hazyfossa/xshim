@@ -35,6 +35,7 @@ pub mod fd {
             fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
             unix::process::CommandExt,
         },
+        path::PathBuf,
         process::Command,
     };
 
@@ -161,9 +162,9 @@ pub mod fd {
     }
 
     impl PassedFd {
-        // pub fn path(&self) -> PathBuf {
-        //     PathBuf::from("/proc/self/fd/").join(self.0.to_string())
-        // }
+        pub fn path(&self) -> PathBuf {
+            PathBuf::from("/proc/self/fd/").join(self.0.to_string())
+        }
     }
 }
 
@@ -213,5 +214,88 @@ pub mod subprocess {
         };
         let child = command.spawn()?;
         Ok(ChildWithCleanup(child))
+    }
+}
+
+pub mod runtime_dir {
+    use std::{fs, ops::Deref, os::unix::fs::PermissionsExt, path::PathBuf};
+
+    use envy::define_env;
+    use eyre::{Context, Result, ensure};
+
+    #[derive(Debug)]
+    pub struct RuntimeDir {
+        path: PathBuf,
+    }
+
+    impl Deref for RuntimeDir {
+        type Target = PathBuf;
+        fn deref(&self) -> &Self::Target {
+            &self.path
+        }
+    }
+
+    define_env!(pub RuntimeDirEnv(PathBuf) = #raw "XDG_RUNTIME_DIR");
+
+    impl RuntimeDir {
+        pub fn from_env(env: &impl envy::Get) -> Result<Self> {
+            let path = env
+                .get::<RuntimeDirEnv>()
+                .context("Environment does not provide a runtime directory")?
+                .0;
+
+            let permissions = fs::metadata(&path)
+                .context("Cannot query runtime dir metadata. Does it exist?")?
+                .permissions()
+                .mode();
+
+            ensure!(
+                permissions & 0o077 == 0,
+                "Runtime directory is insecure: expecting permissions `077`, got {permissions}"
+            );
+
+            Ok(Self { path })
+        }
+    }
+}
+
+pub mod private_file {
+    use std::os::fd::OwnedFd;
+
+    use rustix::{
+        fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create},
+        io::{Errno, write},
+    };
+
+    pub struct PrivateFile(OwnedFd);
+
+    impl PrivateFile {
+        pub fn new(name: &str) -> Result<Self, Errno> {
+            let memfd = memfd_create(name, MemfdFlags::ALLOW_SEALING)?;
+            Ok(Self(memfd))
+        }
+
+        pub fn seal(self) -> Result<SealedPrivateFile, Errno> {
+            fcntl_add_seals(&self.0, SealFlags::all())?;
+            Ok(SealedPrivateFile(self.0))
+        }
+    }
+
+    impl std::io::Write for PrivateFile {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            Ok(write(&self.0, buf)?)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    pub struct SealedPrivateFile(OwnedFd);
+
+    impl SealedPrivateFile {
+        pub fn into_inner(self) -> OwnedFd {
+            self.0
+        }
     }
 }

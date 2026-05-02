@@ -2,7 +2,6 @@ use argh::FromArgValue;
 use envy::{EnvVariable, Get, OsEnv, Set, container::EnvBuf, define_env};
 use eyre::{Context, Result};
 use freedesktop_session_parser::SessionKind;
-use rustix::rand::{GetRandomFlags, getrandom};
 
 use crate::{Args, utils::warn::WarnExt, warn};
 
@@ -14,32 +13,6 @@ pub struct SessionContext {
     pub seat: Option<Seat>,
     pub vt_number: Option<VtNumber>,
     pub env_diff: Option<EnvBuf>,
-}
-
-impl SessionContext {
-    pub fn unique_id(&self) -> Result<String> {
-        let mut parts = Vec::new();
-
-        if let Some(seat) = &self.seat {
-            parts.push(seat.to_string());
-        };
-
-        if let Some(vt) = &self.vt_number {
-            parts.push(vt.to_string());
-        }
-
-        if parts.is_empty() {
-            let mut random = [0u8; 4];
-
-            getrandom(&mut random, GetRandomFlags::INSECURE)
-                .context("Failed to fetch randomness for a session identifier")?;
-
-            let id = u32::from_ne_bytes(random);
-            return Ok(id.to_string());
-        }
-
-        Ok(parts.join("-").to_string())
-    }
 }
 
 #[derive(FromArgValue, Clone)]
