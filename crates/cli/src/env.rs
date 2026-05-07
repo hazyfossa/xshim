@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use envy::{OsEnv, Set, container::EnvBuf, define_env, parse::EnvironmentParse};
 use eyre::{Context, Result};
 
-use crate::{Args, systemd::dbus::environment::SystemdEnvironment};
+use crate::{
+    Args,
+    systemd::{self, dbus::env::SystemdEnvironment},
+};
 
 #[derive(argh::FromArgValue, Clone)]
 pub enum Strategy {
@@ -65,11 +68,10 @@ pub async fn resolve_env(args: &Args) -> Result<EnvBuf> {
         return Ok(EnvBuf::from_diff(unix_env));
     }
 
-    let session_bus = zbus::Connection::session()
-        .await
-        .context("Failed to connect to DBus (session bus)")?;
+    let systemd = systemd::dbus::Manager::connect_session().await?;
 
-    let systemd_env = SystemdEnvironment::open(&session_bus)
+    let systemd_env = systemd
+        .env()
         .await
         .context("Failed to query systemd for environment")?;
 
