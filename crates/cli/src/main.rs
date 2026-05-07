@@ -9,6 +9,7 @@ use enum_dispatch::enum_dispatch;
 use envy::{Get, OsEnv, Set, define_env, diff};
 use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result};
 use freedesktop_session_parser::{SessionKind, get_session_entry};
+use xshim::subprocess::CleanupExt;
 
 use crate::{
     context::{ContextMode, Seat, VtNumber},
@@ -230,8 +231,10 @@ async fn main() -> Result<()> {
         client.apply(context_env.into_diff());
     }
 
-    let mut client_child =
-        xshim::subprocess::spawn_with_cleanup(client).context("Failed to spawn client")?;
+    let mut client_child = client
+        .with_cleanup()
+        .spawn()
+        .context("Failed to spawn client")?;
 
     if let Some(ref mut notifier) = notifier {
         notifier

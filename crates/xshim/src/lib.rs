@@ -13,7 +13,7 @@ use crate::{
     utils::{
         fd::{CommandFdExt, FdContext, SimpleFdContext},
         private_file::SealedPrivateFile,
-        subprocess::{ChildWithCleanup, spawn_with_cleanup},
+        subprocess::CleanupExt,
     },
     xauthority::{ClientAuthorityEnv, XAuthorityManager},
 };
@@ -114,7 +114,8 @@ fn prepare_xorg(
         .envs([("XORG_RUN_AS_USER_OK", "1")]);
 
     let display_rx = DisplayReceiver::setup(&mut fd_context, &mut command)?;
-    command.with_fd_context(fd_context);
+
+    command.with_fd_context(fd_context).with_cleanup();
 
     Ok((display_rx, command))
 }
@@ -168,7 +169,7 @@ pub struct Settings {
 }
 
 pub struct XShim {
-    pub xorg_child: ChildWithCleanup,
+    pub xorg_child: std::process::Child,
     pub client_env: (Display, ClientAuthorityEnv, Option<WindowPath>),
     #[cfg(feature = "client")]
     pub connection: x11rb::rust_connection::RustConnection,
@@ -194,8 +195,8 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
         .setup_server()
         .context("Failed to define server authority")?;
 
-    let (future_display, xorg_command) = prepare_xorg(&settings, server_authority)?;
-    let xorg_child = spawn_with_cleanup(xorg_command).context("Failed to spawn Xorg")?;
+    let (future_display, mut xorg_command) = prepare_xorg(&settings, server_authority)?;
+    let xorg_child = xorg_command.spawn().context("Failed to spawn Xorg")?;
 
     let display = future_display.blocking_wait()?;
 

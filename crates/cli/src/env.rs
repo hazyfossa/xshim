@@ -3,10 +3,7 @@ use std::collections::HashSet;
 use envy::{OsEnv, Set, container::EnvBuf, define_env, parse::EnvironmentParse};
 use eyre::{Context, Result};
 
-use crate::{
-    Args,
-    systemd::{self, dbus::env::SystemdEnvironment},
-};
+use crate::{Args, systemd};
 
 #[derive(argh::FromArgValue, Clone)]
 pub enum Strategy {

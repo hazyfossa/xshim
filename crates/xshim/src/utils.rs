@@ -169,51 +169,24 @@ pub mod fd {
 }
 
 pub mod subprocess {
-    use std::{
-        io,
-        ops::{Deref, DerefMut},
-        os::unix::process::CommandExt,
-        process::{Child, Command},
-    };
+    use std::{os::unix::process::CommandExt, process::Command};
 
-    use rustix::process::{Pid, Signal, kill_process, set_parent_process_death_signal};
+    use rustix::process::{Signal, set_parent_process_death_signal};
 
-    pub struct ChildWithCleanup(Child);
-
-    impl Deref for ChildWithCleanup {
-        type Target = Child;
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
+    pub trait CleanupExt {
+        fn with_cleanup(&mut self) -> &mut Self;
     }
 
-    impl DerefMut for ChildWithCleanup {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.0
-        }
-    }
-
-    // TODO: is this even necessary?
-    impl Drop for ChildWithCleanup {
-        fn drop(&mut self) {
-            let ret = kill_process(Pid::from_child(&self.0), Signal::TERM);
-
-            if ret.is_ok() {
-                let _best_effort = self.0.wait();
+    impl CleanupExt for Command {
+        fn with_cleanup(&mut self) -> &mut Self {
+            // Safety: does not allocate, rustix call is safe
+            unsafe {
+                self.pre_exec(|| {
+                    set_parent_process_death_signal(Some(Signal::KILL))?;
+                    Ok(())
+                })
             }
         }
-    }
-
-    pub fn spawn_with_cleanup(mut command: Command) -> Result<ChildWithCleanup, io::Error> {
-        // Safety: does not allocate, rustix call is safe
-        let command = unsafe {
-            command.pre_exec(|| {
-                set_parent_process_death_signal(Some(Signal::KILL))?;
-                Ok(())
-            })
-        };
-        let child = command.spawn()?;
-        Ok(ChildWithCleanup(child))
     }
 }
 
