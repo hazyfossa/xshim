@@ -48,16 +48,25 @@ impl Manager {
     }
 }
 
+#[allow(unused)]
 pub mod units {
+    use std::process::Command;
+
+    use eyre::ContextCompat;
     use zbus::zvariant::OwnedObjectPath;
 
     use super::*;
 
     pub enum UnitMode {
+        // on conflict, replace already running jobs
         Replace,
+        // on conflict, fail
         Fail,
+        // terminate all units that are not dependencies of this unit
         Isolate,
+        // start without dependencies
         IgnoreDependencies,
+        // start without `requirement` dependencies
         IgnoreRequirements,
     }
 
@@ -74,12 +83,47 @@ pub mod units {
     }
 
     impl Manager {
-        pub async fn transient_unit(&self, name: &str, mode: UnitMode) -> Result<Unit> {
-            // TODO: sensible properties builder
+        pub async fn transient_unit(&self, name: &str, command: Command) -> Result<Unit> {
+            let mut properties = Vec::new();
+
+            // environment
+
+            let env_raw = command.get_envs();
+            let mut env = Vec::with_capacity(env_raw.len());
+
+            for (k, v) in env_raw {
+                // ignore unsets
+                let v = match v {
+                    Some(value) => value,
+                    None => continue,
+                };
+
+                let (k, v) = (|| Some((k.to_str()?, v.to_str()?)))().context(
+                    "Failed to pass environment to unit: variable is not a valid string",
+                )?;
+
+                env.push(format!("{k}={v}"));
+            }
+
+            properties.push(("ENVIRONMENT", env.as_slice().into()));
+
+            // workdir
+
+            if let Some(workdir) = command.get_current_dir() {
+                let workdir = workdir
+                    .to_str()
+                    .context("Failed to set workdir: value is not a valid string")?;
+                properties.push(("WORKDIR", workdir.into()));
+            }
+
+            //
+
+            let properties = properties.iter().map(|(k, v)| (*k, v)).collect::<Vec<_>>();
+            let properties = properties.iter().collect::<Vec<&_>>();
 
             let object = self
                 .dbus
-                .start_transient_unit(name, mode.into(), &[], &[])
+                .start_transient_unit(name, UnitMode::Fail.into(), properties.as_slice(), &[])
                 .await
                 .context("Failed to start transient unit")?;
 
