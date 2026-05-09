@@ -50,10 +50,11 @@ impl Manager {
 
 #[allow(unused)]
 pub mod units {
-    use std::process::Command;
+    use std::{collections::HashMap, process::Command};
 
+    use envy::diff::Entry;
     use eyre::ContextCompat;
-    use zbus::zvariant::OwnedObjectPath;
+    use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
     use super::*;
 
@@ -82,42 +83,82 @@ pub mod units {
         }
     }
 
-    impl Manager {
-        pub async fn transient_unit(&self, name: &str, command: Command) -> Result<Unit> {
-            let mut properties = Vec::new();
+    macro_rules! property {
+        ($name:ident : $ty:ty = $string:literal) => {
+            pub fn $name(&mut self, v: $ty) -> &mut Self {
+                self.set($string, v);
+                self
+            }
+        };
+    }
 
-            // environment
+    pub struct UnitDefinition<'a> {
+        inner: HashMap<&'a str, Value<'a>>,
+    }
 
-            let env_raw = command.get_envs();
-            let mut env = Vec::with_capacity(env_raw.len());
+    impl<'a> UnitDefinition<'a> {
+        pub fn new() -> Self {
+            Self {
+                inner: HashMap::new(),
+            }
+        }
 
-            for (k, v) in env_raw {
-                // ignore unsets
-                let v = match v {
-                    Some(value) => value,
-                    None => continue,
+        pub fn set(&mut self, property: &'a str, value: impl Into<Value<'a>>) {
+            self.inner.insert(property, value.into());
+        }
+
+        pub fn environment(&mut self, env: impl envy::diff::Diff) -> Result<&mut Self> {
+            let env = env.to_env_diff().into_iter();
+
+            let mut set = Vec::new();
+            let mut unset = Vec::new();
+
+            for entry in env {
+                match entry {
+                    Entry::Set { key, value } => {
+                        let value = value.to_str().context(
+                            "Failed to pass environment to unit: variable is not a valid string",
+                        )?;
+                        set.push(format!("{key}={value}"));
+                    }
+
+                    Entry::Unset { key } => unset.push(key),
                 };
-
-                let (k, v) = (|| Some((k.to_str()?, v.to_str()?)))().context(
-                    "Failed to pass environment to unit: variable is not a valid string",
-                )?;
-
-                env.push(format!("{k}={v}"));
             }
 
-            properties.push(("ENVIRONMENT", env.as_slice().into()));
+            self.set("ENVIRONMENT", set);
+            self.set("UNSET_ENVIRONMENT", unset);
 
-            // workdir
+            Ok(self)
+        }
+
+        // TODO
+        property!(workdir: &'a str = "WorkingDirectory");
+
+        pub fn from_command(command: &'a Command) -> Result<Self> {
+            let mut definition = Self::new();
+
+            definition.environment(command.get_envs())?;
 
             if let Some(workdir) = command.get_current_dir() {
-                let workdir = workdir
+                let value = workdir
                     .to_str()
-                    .context("Failed to set workdir: value is not a valid string")?;
-                properties.push(("WORKDIR", workdir.into()));
+                    .context("Failed to pass workdir: value is not a valid string")?;
+
+                definition.workdir(value);
             }
 
-            //
+            Ok(definition)
+        }
+    }
 
+    impl Manager {
+        pub async fn transient_unit<'a>(
+            &self,
+            name: &str,
+            definition: UnitDefinition<'a>,
+        ) -> Result<Unit> {
+            let properties = definition.inner;
             let properties = properties.iter().map(|(k, v)| (*k, v)).collect::<Vec<_>>();
             let properties = properties.iter().collect::<Vec<&_>>();
 
