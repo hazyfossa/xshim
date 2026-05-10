@@ -19,4 +19,6 @@ zbus = { version = "5.14.0", default-features = false, features = [
 
 [features]
 default = ["dbus"]
+
 dbus = ["dep:zbus"]
+xrdb = ["xshim/xrdb"]

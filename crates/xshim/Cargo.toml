@@ -17,6 +17,5 @@ zeroize = { version = "1.8.2", features = ["derive"] }
 default = ["xrdb"]
 
 settings = ["dep:bon"]
-connection = ["dep:x11rb"]
-xrdb = ["connection"]
-client = ["connection"]
+xrdb = ["dep:x11rb"]
+client = ["dep:x11rb"]

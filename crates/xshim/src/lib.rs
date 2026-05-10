@@ -22,7 +22,7 @@ pub use utils::subprocess;
 
 mod xauthority;
 
-#[cfg(feature = "connection")]
+#[cfg(feature = "client")]
 pub use x11rb::rust_connection::RustConnection as XConnection;
 
 // You may want to change this if you're making a package
@@ -114,8 +114,11 @@ fn prepare_xorg(
     Ok((display_rx, command))
 }
 
-#[cfg(feature = "connection")]
-fn xorg_connection(display: &Display, cookie: &xauthority::Cookie) -> Result<XConnection> {
+#[cfg(any(feature = "client", feature = "xrdb"))]
+fn xorg_connection(
+    display: &Display,
+    cookie: &xauthority::Cookie,
+) -> Result<x11rb::rust_connection::RustConnection> {
     use eyre::OptionExt;
     use x11rb::reexports::x11rb_protocol::parse_display::ParsedDisplay;
     use x11rb::rust_connection::DefaultStream;
@@ -168,10 +171,11 @@ pub struct Settings {
     /// Marginally improves performance.
     ///
     /// Safety:
-    /// only set if sure no other process will interact with Xauthority.
+    /// Only set if sure no other process will interact with Xauthority while in setup.
     /// Usage with `xauthority_path` unset is generally unsafe.
     unsafe_skip_locks: Option<bool>,
 
+    /// Override paths used for Xresources loading.
     #[cfg(feature = "xrdb")]
     resources: Option<Vec<PathBuf>>,
 }
@@ -180,7 +184,7 @@ pub struct XShim {
     pub xorg_child: std::process::Child,
     pub client_env: (Display, ClientAuthorityEnv, Option<WindowPath>),
     #[cfg(feature = "client")]
-    pub connection: x11rb::rust_connection::RustConnection,
+    pub connection: XConnection,
 }
 
 /// Returns (xorg_child, client_env)
@@ -226,7 +230,7 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
 
     let cookie = authority_manager.finalize_into_cookie();
 
-    #[cfg(feature = "connection")]
+    #[cfg(any(feature = "client", feature = "xrdb"))]
     let connection = xorg_connection(&display, &cookie)?;
 
     // TODO: xrdb

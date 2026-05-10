@@ -16,7 +16,19 @@ XShim is not:
 # todo
 - [ ] Examples of use
 - [x] Xinit compatibility mode
-- [x] Better systemd integration
+- [x] Systemd integration
 - [ ] Parsing of Xorg logs into journald format
 - [x] Library mode
-- [ ] Async via tokio
+- [x] Async (CLI)
+- [ ] XResources support
+
+# features
+
+library:
+- settings: enables extensive configuration
+- client: makes your app an Xorg client after setup
+- xrdb (WIP): loads Xresources
+
+cli:
+- dbus: required feature for full systemd intergration (env, transient units)
+- xrdb (WIP): loads Xresources
