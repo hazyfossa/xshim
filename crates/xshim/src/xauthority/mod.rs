@@ -100,14 +100,14 @@ impl XAuthorityManager {
                 &self.cookie,
                 Scope::Any,
                 Target::Client {
-                    display_number: display.number(),
+                    display_number: **display,
                 },
             ),
             Entry::new(
                 &self.cookie,
                 Scope::Local(self.hostname.clone()),
                 Target::Client {
-                    display_number: display.number(),
+                    display_number: **display,
                 },
             ),
         ];

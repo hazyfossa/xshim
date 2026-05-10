@@ -9,10 +9,10 @@ use enum_dispatch::enum_dispatch;
 use envy::{Get, OsEnv, Set, define_env, diff};
 use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result};
 use freedesktop_session_parser::{SessionKind, get_session_entry};
-use xshim::subprocess::CleanupExt;
+use xshim::{Seat, VtNumber, subprocess::CleanupExt};
 
 use crate::{
-    context::{ContextMode, Seat, VtNumber},
+    context::ContextMode,
     systemd::{journald, notify::Notifier},
     utils::path::EnsureExistsExt,
 };
@@ -139,7 +139,7 @@ use env::resolve_env;
 
 #[cfg(not(feature = "dbus"))]
 pub async fn resolve_env(_: &Args) -> Result<EnvBuf> {
-    Ok(EnvBuf::from_diff(OsEnv::new_view()))
+    Ok(OsEnv::new_view().into())
 }
 
 #[derive(FromArgs)]

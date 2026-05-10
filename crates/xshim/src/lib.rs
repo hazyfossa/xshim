@@ -5,8 +5,7 @@ use std::{
     process::Command,
 };
 
-use bon::Builder;
-use envy::{OsEnv, container::EnvBuf, define_env};
+use envy::{Get, OsEnv, container::EnvBuf, define_env};
 use eyre::{Context, Result, bail};
 
 use crate::{
@@ -29,24 +28,16 @@ pub use x11rb::rust_connection::RustConnection as XConnection;
 // You may want to change this if you're making a package
 const DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 
-pub type Seat = String;
-pub type VtNumber = u32;
-
+define_env!(pub Seat(String) = "XDG_SEAT");
+define_env!(pub VtNumber(u32) = "XDG_VTNR");
 define_env!(pub Display(u16) = "DISPLAY");
-
-impl Display {
-    pub fn number(&self) -> u16 {
-        self.0
-    }
-}
-
 define_env!(pub WindowPath(String) = "WINDOWPATH");
 
 impl WindowPath {
-    pub fn previous_plus_vt(env: &impl envy::Get, vt: &VtNumber) -> Self {
+    fn previous_plus_vt(env: &impl envy::Get, vt: &VtNumber) -> Self {
         let previous = env.get::<Self>();
         Self(match previous {
-            Ok(path) => format!("{}:{}", *path, *vt),
+            Ok(path) => format!("{}:{}", path.0, vt.0),
             Err(_) => vt.to_string(),
         })
     }
@@ -88,21 +79,24 @@ impl DisplayReceiver {
 }
 
 fn prepare_xorg(
-    settings: &Settings,
+    path: PathBuf,
+    vt: Option<VtNumber>,
+    seat: Option<Seat>,
     server_authority: SealedPrivateFile,
+    extra_args: Vec<String>,
 ) -> Result<(DisplayReceiver, Command)> {
     let mut fd_context = FdContext::new(2);
 
     let server_authority = fd_context.pass(server_authority.into_inner())?;
 
-    let mut command = Command::new(&settings.path);
+    let mut command = Command::new(path);
 
-    if let Some(seat) = &settings.seat {
+    if let Some(seat) = seat {
         command.args(["-seat", &seat]);
     }
 
-    if let Some(vt) = settings.vt {
-        command.arg(format!("vt{}", vt)).arg("-novtswitch");
+    if let Some(vt) = vt {
+        command.arg(format!("vt{}", vt.0)).arg("-novtswitch");
     }
 
     command
@@ -110,7 +104,7 @@ fn prepare_xorg(
         .args(["-nolisten", "tcp"])
         .args(["-background", "none", "-noreset", "-keeptty"])
         .args(["-verbose", "3", "-logfile", "/dev/null"])
-        .args(&settings.extra_args)
+        .args(extra_args)
         .envs([("XORG_RUN_AS_USER_OK", "1")]);
 
     let display_rx = DisplayReceiver::setup(&mut fd_context, &mut command)?;
@@ -147,22 +141,36 @@ fn xorg_connection(display: &Display, cookie: &xauthority::Cookie) -> Result<XCo
     conn.ok_or_eyre("Failed to connect to Xorg")
 }
 
-#[derive(Builder)]
+#[derive(Default)]
+#[cfg_attr(feature = "settings", derive(bon::Builder))]
 pub struct Settings {
-    #[builder(default = DEFAULT_XORG_PATH.into())]
-    path: PathBuf,
+    /// Path to Xorg binary
+    path: Option<PathBuf>,
+
+    /// Override current environment
     env: Option<EnvBuf>,
 
-    #[builder(into)]
+    /// VT number to use.
+    /// If set to None, it will be determined by Xorg.
     vt: Option<VtNumber>,
-    #[builder(into)]
+
+    /// Login seat to use.
+    /// If set to None, Xorg will operate without a seat.
     seat: Option<Seat>,
 
-    #[builder(default)]
+    /// Extra arguments to pass to Xorg
     extra_args: Vec<String>,
+
+    /// Where to place the XAuthority file
     xauthority_path: Option<PathBuf>,
-    #[builder(default = false)]
-    unsafe_skip_locks: bool,
+
+    /// Do not use locks when dealing with Xauthority.
+    /// Marginally improves performance.
+    ///
+    /// Safety:
+    /// only set if sure no other process will interact with Xauthority.
+    /// Usage with `xauthority_path` unset is generally unsafe.
+    unsafe_skip_locks: Option<bool>,
 
     #[cfg(feature = "xrdb")]
     resources: Option<Vec<PathBuf>>,
@@ -182,20 +190,32 @@ pub struct XShim {
 /// (Xorg as root is discouraged)
 // TODO: optionally switch user on spawn
 pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
-    let env = settings
-        .env
-        .take()
-        .unwrap_or(EnvBuf::from_diff(OsEnv::new_view()));
+    let env = settings.env.take().unwrap_or(OsEnv::new_view().into());
 
-    let authority_manager =
-        XAuthorityManager::new(settings.unsafe_skip_locks, &settings.xauthority_path, &env)
-            .context("Cannot setup XAuthority manager")?;
+    let vt = settings.vt.or(env.get().ok());
+    let seat = settings.seat.or(env.get().ok());
+
+    let window_path = vt.as_ref().map(|vt| WindowPath::previous_plus_vt(&env, vt));
+
+    let authority_manager = XAuthorityManager::new(
+        settings.unsafe_skip_locks.unwrap_or(false),
+        &settings.xauthority_path,
+        &env,
+    )
+    .context("Cannot setup XAuthority manager")?;
 
     let server_authority = authority_manager
         .setup_server()
         .context("Failed to define server authority")?;
 
-    let (future_display, mut xorg_command) = prepare_xorg(&settings, server_authority)?;
+    let (future_display, mut xorg_command) = prepare_xorg(
+        settings.path.unwrap_or(DEFAULT_XORG_PATH.into()),
+        vt,
+        seat,
+        server_authority,
+        settings.extra_args,
+    )?;
+
     let xorg_child = xorg_command.spawn().context("Failed to spawn Xorg")?;
 
     let display = future_display.blocking_wait()?;
@@ -205,11 +225,6 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
         .context("Failed to define client authority")?;
 
     let cookie = authority_manager.finalize_into_cookie();
-
-    let window_path = settings
-        .vt
-        .as_ref()
-        .map(|vt| WindowPath::previous_plus_vt(&env, vt));
 
     #[cfg(feature = "connection")]
     let connection = xorg_connection(&display, &cookie)?;
@@ -229,5 +244,5 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
 }
 
 pub fn setup_xorg() -> Result<XShim> {
-    setup_xorg_with_settings(Settings::builder().build())
+    setup_xorg_with_settings(Settings::default())
 }

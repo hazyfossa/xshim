@@ -1,12 +1,10 @@
 use argh::FromArgValue;
-use envy::{EnvVariable, Get, OsEnv, Set, container::EnvBuf, define_env};
+use envy::{EnvVariable, Get, OsEnv, Set, container::EnvBuf};
 use eyre::{Context, Result};
 use freedesktop_session_parser::SessionKind;
+use xshim::{Seat, VtNumber};
 
 use crate::{Args, utils::warn::WarnExt, warn};
-
-define_env!(pub Seat(String) = "XDG_SEAT");
-define_env!(pub VtNumber(u32) = "XDG_VTNR");
 
 #[derive(Default)]
 pub struct SessionContext {
@@ -78,8 +76,8 @@ Are you running this from a correct place?",
 
     Ok(SessionContext {
         seat,
-        vt_number: Some(vt_number),
-        env_diff: Some(EnvBuf::from_diff(env)),
+        vt_number: vt_number.into(),
+        env_diff: Some(env.into()),
     })
 }
 

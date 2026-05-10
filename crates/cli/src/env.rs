@@ -62,7 +62,7 @@ pub async fn resolve_env(args: &Args) -> Result<EnvBuf> {
     let unix_env = OsEnv::new_view();
 
     if matches!(mode, Strategy::Unix) {
-        return Ok(EnvBuf::from_diff(unix_env));
+        return Ok(unix_env.into());
     }
 
     let systemd = systemd::dbus::Manager::connect_session().await?;
