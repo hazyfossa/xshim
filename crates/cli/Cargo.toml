@@ -1,5 +1,5 @@
 [package]
-name = "xshim-cli"
+name = "xshim"
 version = "0.1.0"
 edition = "2024"
 
@@ -12,7 +12,7 @@ simple-eyre = "0.3.1"
 freedesktop-session-parser = { git = "https://github.com/hazyfossa/freedesktop-session-parser", version = "0.1.0" }
 rustix = { version = "1.1.4", features = ["fs"] }
 tokio = { version = "1.50.0", features = ["rt", "macros"] }
-xshim = { version = "0.1.0", path = "../xshim", features = ["settings"] }
+libxshim = { version = "0.1.0", path = "../lib", features = ["settings"] }
 zbus = { version = "5.14.0", default-features = false, features = [
     "tokio",
 ], optional = true }
@@ -21,4 +21,4 @@ zbus = { version = "5.14.0", default-features = false, features = [
 default = ["dbus"]
 
 dbus = ["dep:zbus"]
-xrdb = ["xshim/xrdb"]
+xrdb = ["libxshim/xrdb"]

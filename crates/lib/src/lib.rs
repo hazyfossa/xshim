@@ -187,11 +187,7 @@ pub struct XShim {
     pub connection: XConnection,
 }
 
-/// Returns (xorg_child, client_env)
-/// Will block the current thread until Xorg provides a display
-///
-/// Should be called from the context of the session user, *not* the root user
-/// (Xorg as root is discouraged)
+/// See `setup_xorg` for documentation
 // TODO: optionally switch user on spawn
 pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
     let env = settings.env.take().unwrap_or(OsEnv::new_view().into());
@@ -247,6 +243,10 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
     })
 }
 
+/// This function block the current thread until setup is finished and Xorg provides a display
+///
+/// Should be called from the context of the session user, *not* the root user
+/// (Xorg as root is discouraged)
 pub fn setup_xorg() -> Result<XShim> {
     setup_xorg_with_settings(Settings::default())
 }

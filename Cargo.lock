@@ -486,6 +486,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
+name = "libxshim"
+version = "0.1.0"
+dependencies = [
+ "binrw",
+ "bon",
+ "envy",
+ "eyre",
+ "rustix",
+ "x11rb",
+ "zeroize",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1137,28 +1150,15 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 name = "xshim"
 version = "0.1.0"
 dependencies = [
- "binrw",
- "bon",
- "envy",
- "eyre",
- "rustix",
- "x11rb",
- "zeroize",
-]
-
-[[package]]
-name = "xshim-cli"
-version = "0.1.0"
-dependencies = [
  "argh",
  "enum_dispatch",
  "envy",
  "eyre",
  "freedesktop-session-parser",
+ "libxshim",
  "rustix",
  "simple-eyre",
  "tokio",
- "xshim",
  "zbus",
 ]
 

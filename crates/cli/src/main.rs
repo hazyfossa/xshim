@@ -9,13 +9,15 @@ use enum_dispatch::enum_dispatch;
 use envy::{Get, OsEnv, Set, define_env, diff};
 use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result};
 use freedesktop_session_parser::{SessionKind, get_session_entry};
-use xshim::{Seat, VtNumber, subprocess::CleanupExt};
 
 use crate::{
     context::ContextMode,
     systemd::{journald, notify::Notifier},
-    utils::path::EnsureExistsExt,
+    utils::{path::EnsureExistsExt, warn::WarnExt},
 };
+
+use lib::{Seat, VtNumber, subprocess::CleanupExt};
+use libxshim as lib;
 
 #[enum_dispatch]
 trait Mode {
@@ -208,8 +210,8 @@ async fn main() -> Result<()> {
         false => None,
     };
 
-    let xshim = xshim::setup_xorg_with_settings(
-        xshim::Settings::builder()
+    let xshim = libxshim::setup_xorg_with_settings(
+        libxshim::Settings::builder()
             .env(env)
             .maybe_path(args.xorg_path)
             .extra_args(args.xorg_args)
@@ -239,7 +241,8 @@ async fn main() -> Result<()> {
     if let Some(ref mut notifier) = notifier {
         notifier
             .notify_ready()
-            .context("Failed to signal readiness")?;
+            .context("Failed to signal readiness")
+            .warn();
     }
 
     // TODO: is there a point in waiting on Xorg? Client should always close if XServer drops, right?

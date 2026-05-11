@@ -2,7 +2,7 @@ use argh::FromArgValue;
 use envy::{EnvVariable, Get, OsEnv, Set, container::EnvBuf};
 use eyre::{Context, Result};
 use freedesktop_session_parser::SessionKind;
-use xshim::{Seat, VtNumber};
+use libxshim::{Seat, VtNumber};
 
 use crate::{Args, utils::warn::WarnExt, warn};
 
