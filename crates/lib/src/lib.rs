@@ -2,7 +2,7 @@ use std::{
     io::{BufRead, BufReader, PipeReader, pipe},
     os::fd::AsRawFd,
     path::PathBuf,
-    process::Command,
+    process::{Command, Stdio},
 };
 
 use envy::{Get, OsEnv, container::EnvBuf, define_env};
@@ -10,7 +10,7 @@ use eyre::{Context, Result, bail};
 
 use crate::{
     utils::{
-        fd::{CommandFdExt, FdContext, SimpleFdContext},
+        fd::{CommandFdExt, FdContext},
         private_file::SealedPrivateFile,
         subprocess::CleanupExt,
     },
@@ -46,16 +46,6 @@ impl WindowPath {
 struct DisplayReceiver(PipeReader);
 
 impl DisplayReceiver {
-    fn setup(fd_context: &mut SimpleFdContext, command: &mut Command) -> Result<Self> {
-        let (display_rx, display_tx) = pipe().context("Failed to open pipe for display fd")?;
-
-        let display_tx_passed = fd_context.pass(display_tx.into())?;
-
-        command.args(["-displayfd", &display_tx_passed.as_raw_fd().to_string()]);
-
-        Ok(Self(display_rx))
-    }
-
     // TODO: async
     pub fn blocking_wait(self) -> Result<Display> {
         let mut reader = BufReader::new(self.0);
@@ -78,40 +68,83 @@ impl DisplayReceiver {
     }
 }
 
-fn prepare_xorg(
-    path: PathBuf,
-    vt: Option<VtNumber>,
-    seat: Option<Seat>,
-    server_authority: SealedPrivateFile,
-    extra_args: Vec<String>,
-) -> Result<(DisplayReceiver, Command)> {
-    let mut fd_context = FdContext::new(2);
+pub struct Logger(PipeReader);
 
-    let server_authority = fd_context.pass(server_authority.into_inner())?;
+struct XorgBuilder {
+    command: Command,
+    fd_context: FdContext,
+}
 
-    let mut command = Command::new(path);
+impl XorgBuilder {
+    fn new(path: PathBuf) -> Self {
+        let mut command = Command::new(path);
 
-    if let Some(seat) = seat {
-        command.args(["-seat", &seat]);
+        // Defaults
+        command
+            .args(["-background", "none", "-noreset", "-keeptty"])
+            .args(["-nolisten", "tcp"])
+            .envs([("XORG_RUN_AS_USER_OK", "1")]);
+
+        Self {
+            command,
+            fd_context: FdContext::new(),
+        }
     }
 
-    if let Some(vt) = vt {
-        command.arg(format!("vt{}", vt.0)).arg("-novtswitch");
+    fn maybe_vt(&mut self, vt: Option<VtNumber>) -> &mut Self {
+        if let Some(vt) = vt {
+            self.command.arg(format!("vt{}", vt.0)).arg("-novtswitch");
+        };
+
+        self
     }
 
-    command
-        .args(["-auth".into(), server_authority.path()])
-        .args(["-nolisten", "tcp"])
-        .args(["-background", "none", "-noreset", "-keeptty"])
-        .args(["-verbose", "3", "-logfile", "/dev/null"])
-        .args(extra_args)
-        .envs([("XORG_RUN_AS_USER_OK", "1")]);
+    fn maybe_seat(&mut self, seat: Option<Seat>) -> &mut Self {
+        if let Some(seat) = seat {
+            self.command.args(["-seat", &seat]);
+        };
 
-    let display_rx = DisplayReceiver::setup(&mut fd_context, &mut command)?;
+        self
+    }
 
-    command.with_fd_context(fd_context).with_cleanup();
+    fn authority(&mut self, authority: SealedPrivateFile) -> &mut Self {
+        let passed = self.fd_context.pass(authority.into_inner());
+        self.command.args(["-auth".into(), passed.path()]);
+        self
+    }
 
-    Ok((display_rx, command))
+    fn logging(&mut self, level: u8) -> Result<Logger> {
+        let (rx, tx) = pipe().context("Failed to open logging pipe")?;
+
+        let tx_passed = self.fd_context.pass(tx.into());
+
+        self.command
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .args(["-logfile".into(), tx_passed.path()])
+            .args(["-verbose", &level.to_string()]);
+
+        Ok(Logger(rx))
+    }
+
+    fn display_receiver(&mut self) -> Result<DisplayReceiver> {
+        let (rx, tx) = pipe().context("Failed to open pipe for display fd")?;
+        let tx_passed = self.fd_context.pass(tx.into());
+
+        self.command
+            .args(["-displayfd", &tx_passed.as_raw_fd().to_string()]);
+
+        Ok(DisplayReceiver(rx))
+    }
+
+    fn finish(mut self, extra_args: Vec<String>) -> Command {
+        self.command
+            .args(extra_args)
+            .with_fd_context(self.fd_context)
+            .with_cleanup();
+
+        self.command
+    }
 }
 
 #[cfg(any(feature = "client", feature = "xrdb"))]
@@ -162,7 +195,7 @@ pub struct Settings {
     seat: Option<Seat>,
 
     /// Extra arguments to pass to Xorg
-    extra_args: Vec<String>,
+    extra_args: Option<Vec<String>>,
 
     /// Where to place the XAuthority file
     xauthority_path: Option<PathBuf>,
@@ -182,6 +215,7 @@ pub struct Settings {
 
 pub struct XShim {
     pub xorg_child: std::process::Child,
+    pub logger: Logger,
     pub client_env: (Display, ClientAuthorityEnv, Option<WindowPath>),
     #[cfg(feature = "client")]
     pub connection: XConnection,
@@ -208,15 +242,19 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
         .setup_server()
         .context("Failed to define server authority")?;
 
-    let (future_display, mut xorg_command) = prepare_xorg(
-        settings.path.unwrap_or(DEFAULT_XORG_PATH.into()),
-        vt,
-        seat,
-        server_authority,
-        settings.extra_args,
-    )?;
+    let mut xorg = XorgBuilder::new(settings.path.unwrap_or(DEFAULT_XORG_PATH.into()));
 
-    let xorg_child = xorg_command.spawn().context("Failed to spawn Xorg")?;
+    xorg.maybe_vt(vt)
+        .maybe_seat(seat)
+        .authority(server_authority);
+
+    let future_display = xorg.display_receiver()?;
+    let logger = xorg.logging(3)?; // TODO: setting
+
+    let xorg_child = xorg
+        .finish(settings.extra_args.unwrap_or_default())
+        .spawn()
+        .context("Failed to spawn Xorg")?;
 
     let display = future_display.blocking_wait()?;
 
@@ -235,6 +273,7 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
 
     Ok(XShim {
         xorg_child,
+        logger,
         client_env: (display, client_authority, window_path),
 
         // returns the connection if "client" feature is toggled, drops otherwise
