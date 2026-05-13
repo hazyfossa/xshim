@@ -1,5 +1,9 @@
+use std::os::unix::ffi::OsStringExt;
+
 use binrw::binrw;
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+use crate::utils::hostname::Hostname;
 
 #[binrw]
 #[brw(repr(u16))]
@@ -12,8 +16,6 @@ pub enum Family {
     Krb5Principal = 253,
     LocalHost = 252,
 }
-
-pub type Hostname = Vec<u8>;
 
 fn bound_len<B: TryFrom<usize>, T>(value: &T, field: &str) -> Result<B, binrw::Error> {
     size_of_val(value)
@@ -33,7 +35,7 @@ pub struct Entry {
     #[bw(calc = {bound_len(&address, "address")?})]
     address_len: u16,
     #[br(count = address_len)]
-    pub address: Hostname,
+    pub address: Vec<u8>,
 
     #[bw(calc = {bound_len(&display, "display")?})]
     display_len: u16,
@@ -75,7 +77,7 @@ impl From<Scope> for (Family, Hostname) {
         match value {
             Scope::Local(hostname) => (Family::Local, hostname),
             // TODO: address in little-endian
-            Scope::Any => (Family::Wild, [127, 0, 0, 2].to_vec()),
+            Scope::Any => (Family::Wild, "127.0.0.2".into()),
         }
     }
 }
@@ -103,7 +105,7 @@ impl Entry {
 
         Entry {
             family,
-            address,
+            address: address.into_vec(),
             display: vec![target.into()],
             name: Cookie::AUTH_NAME.into(),
             data: cookie.raw_data(),

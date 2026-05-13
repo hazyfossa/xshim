@@ -188,3 +188,17 @@ pub mod private_file {
         }
     }
 }
+
+pub mod hostname {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+    use rustix::system::uname;
+
+    pub type Hostname = OsString;
+
+    pub fn current() -> Hostname {
+        let uname = uname();
+        let bytes = uname.nodename().to_bytes_with_nul().to_vec();
+        OsString::from_vec(bytes)
+    }
+}

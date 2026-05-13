@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsString,
     io::{BufRead, BufReader, PipeReader, pipe},
     os::fd::AsRawFd,
     path::PathBuf,
@@ -8,9 +9,12 @@ use std::{
 use envy::{Get, OsEnv, container::EnvBuf, define_env};
 use eyre::{Context, Result, bail};
 
+#[cfg(any(feature = "client", feature = "xrdb"))]
+use crate::utils::hostname::Hostname;
 use crate::{
     utils::{
         fd::{CommandFdExt, FdContext},
+        hostname,
         private_file::SealedPrivateFile,
         subprocess::CleanupExt,
     },
@@ -68,8 +72,6 @@ impl DisplayReceiver {
     }
 }
 
-pub struct Logger(PipeReader);
-
 struct XorgBuilder {
     command: Command,
     fd_context: FdContext,
@@ -113,7 +115,7 @@ impl XorgBuilder {
         self
     }
 
-    fn logging(&mut self, level: u8) -> Result<Logger> {
+    fn logging(&mut self, level: u8) -> Result<PipeReader> {
         let (rx, tx) = pipe().context("Failed to open logging pipe")?;
 
         let tx_passed = self.fd_context.pass(tx.into());
@@ -124,7 +126,7 @@ impl XorgBuilder {
             .args(["-logfile".into(), tx_passed.path()])
             .args(["-verbose", &level.to_string()]);
 
-        Ok(Logger(rx))
+        Ok(rx)
     }
 
     fn display_receiver(&mut self) -> Result<DisplayReceiver> {
@@ -149,6 +151,7 @@ impl XorgBuilder {
 
 #[cfg(any(feature = "client", feature = "xrdb"))]
 fn xorg_connection(
+    hostname: Hostname,
     display: &Display,
     cookie: &xauthority::Cookie,
 ) -> Result<x11rb::rust_connection::RustConnection> {
@@ -156,8 +159,14 @@ fn xorg_connection(
     use x11rb::reexports::x11rb_protocol::parse_display::ParsedDisplay;
     use x11rb::rust_connection::DefaultStream;
 
+    // TODO: make this a warning, proceed with no hostname
+    let hostname = match hostname.into_string() {
+        Ok(s) => s,
+        Err(_) => bail!("Hostname is not valid UTF-8"),
+    };
+
     let display = ParsedDisplay {
-        host: "".into(), // Use hostname from XAuthorityManager?
+        host: hostname,
         protocol: None,
         display: **display,
         screen: 0,
@@ -165,7 +174,7 @@ fn xorg_connection(
 
     let conn = display.connect_instruction().find_map(|c| {
         let (stream, _) = DefaultStream::connect(&c).ok()?;
-        XConnection::connect_to_stream_with_auth_info(
+        x11rb::rust_connection::RustConnection::connect_to_stream_with_auth_info(
             stream,
             0,
             xauthority::Cookie::AUTH_NAME.into(),
@@ -185,6 +194,9 @@ pub struct Settings {
 
     /// Override current environment
     env: Option<EnvBuf>,
+
+    /// Override current hostname
+    hostname: Option<OsString>,
 
     /// VT number to use.
     /// If set to None, it will be determined by Xorg.
@@ -215,7 +227,7 @@ pub struct Settings {
 
 pub struct XShim {
     pub xorg_child: std::process::Child,
-    pub logger: Logger,
+    pub logger: PipeReader,
     pub client_env: (Display, ClientAuthorityEnv, Option<WindowPath>),
     #[cfg(feature = "client")]
     pub connection: XConnection,
@@ -228,6 +240,7 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
 
     let vt = settings.vt.or(env.get().ok());
     let seat = settings.seat.or(env.get().ok());
+    let hostname = settings.hostname.unwrap_or(hostname::current());
 
     let window_path = vt.as_ref().map(|vt| WindowPath::previous_plus_vt(&env, vt));
 
@@ -235,6 +248,7 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
         settings.unsafe_skip_locks.unwrap_or(false),
         &settings.xauthority_path,
         &env,
+        hostname,
     )
     .context("Cannot setup XAuthority manager")?;
 
@@ -262,10 +276,10 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
         .setup_client(&display)
         .context("Failed to define client authority")?;
 
-    let cookie = authority_manager.finalize_into_cookie();
+    let (hostname, cookie) = authority_manager.finalize();
 
     #[cfg(any(feature = "client", feature = "xrdb"))]
-    let connection = xorg_connection(&display, &cookie)?;
+    let connection = xorg_connection(hostname, &display, &cookie)?;
 
     // TODO: xrdb
 

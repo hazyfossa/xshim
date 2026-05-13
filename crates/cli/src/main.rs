@@ -190,6 +190,8 @@ fn _help_skip_locks() {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    simple_eyre::install()?;
+
     let args: Args = argh::from_env();
     let env = resolve_env(&args)
         .await
@@ -197,13 +199,10 @@ async fn main() -> Result<()> {
 
     // TODO: make this non-fatal, fallback to stderr
     journald::init_journald().context("Failed to initialize journald client")?;
-    simple_eyre::install()?;
 
-    let mut context = context::aqquire(&args)
+    let context = context::aqquire(&args)
         .await
         .context("Failed to aqquire session context")?;
-
-    let context_env = context.env_diff.take();
 
     let mut notifier = match args.notify {
         true => Some(Notifier::from_env(&env).context("Failed to setup systemd notifications")?),
@@ -229,7 +228,7 @@ async fn main() -> Result<()> {
         (diff::unset::<VtNumber>(), diff::unset::<Seat>()),
     ));
 
-    if let Some(context_env) = context_env {
+    if let Some(context_env) = context.env_diff {
         client.apply(context_env.into_diff());
     }
 

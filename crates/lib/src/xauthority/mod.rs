@@ -9,14 +9,12 @@ use file::*;
 use std::path::PathBuf;
 
 use envy::define_env;
-use rustix::{
-    rand::{GetRandomFlags, getrandom},
-    system::uname,
-};
+use rustix::rand::{GetRandomFlags, getrandom};
 
 use crate::{
     Display,
     utils::{
+        hostname::Hostname,
         private_file::{PrivateFile, SealedPrivateFile},
         runtime_dir::RuntimeDir,
     },
@@ -29,10 +27,6 @@ fn make_cookie() -> Result<Cookie> {
     let mut cookie_buf = [0u8; Cookie::BYTES_LEN];
     getrandom(&mut cookie_buf, GetRandomFlags::empty()).context("getrandom() failed")?;
     Ok(Cookie::new(cookie_buf))
-}
-
-fn get_hostname() -> Hostname {
-    uname().nodename().to_bytes().to_vec()
 }
 
 fn get_xauthority_path(env: &impl envy::Get) -> Result<PathBuf> {
@@ -64,9 +58,9 @@ impl XAuthorityManager {
         skip_locks: bool,
         xauthority_path: &Option<PathBuf>,
         env: &impl envy::Get,
+        hostname: Hostname,
     ) -> Result<Self> {
         let cookie = make_cookie()?;
-        let hostname = get_hostname();
 
         let xauthority_path = xauthority_path
             .clone()
@@ -129,7 +123,7 @@ impl XAuthorityManager {
         Ok(path.clone().into())
     }
 
-    pub fn finalize_into_cookie(self) -> Cookie {
-        self.cookie
+    pub fn finalize(self) -> (Hostname, Cookie) {
+        (self.hostname, self.cookie)
     }
 }
