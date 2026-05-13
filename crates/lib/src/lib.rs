@@ -9,8 +9,6 @@ use std::{
 use envy::{Get, OsEnv, container::EnvBuf, define_env};
 use eyre::{Context, Result, bail};
 
-#[cfg(any(feature = "client", feature = "xrdb"))]
-use crate::utils::hostname::Hostname;
 use crate::{
     utils::{
         fd::{CommandFdExt, FdContext},
@@ -115,18 +113,14 @@ impl XorgBuilder {
         self
     }
 
-    fn logging(&mut self, level: u8) -> Result<PipeReader> {
-        let (rx, tx) = pipe().context("Failed to open logging pipe")?;
-
-        let tx_passed = self.fd_context.pass(tx.into());
-
+    fn logging(&mut self, level: u8) -> &mut Self {
         self.command
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .args(["-logfile".into(), tx_passed.path()])
+            .stderr(Stdio::piped())
+            .arg("-logfile /dev/null")
             .args(["-verbose", &level.to_string()]);
 
-        Ok(rx)
+        self
     }
 
     fn display_receiver(&mut self) -> Result<DisplayReceiver> {
@@ -151,7 +145,6 @@ impl XorgBuilder {
 
 #[cfg(any(feature = "client", feature = "xrdb"))]
 fn xorg_connection(
-    hostname: Hostname,
     display: &Display,
     cookie: &xauthority::Cookie,
 ) -> Result<x11rb::rust_connection::RustConnection> {
@@ -159,14 +152,8 @@ fn xorg_connection(
     use x11rb::reexports::x11rb_protocol::parse_display::ParsedDisplay;
     use x11rb::rust_connection::DefaultStream;
 
-    // TODO: make this a warning, proceed with no hostname
-    let hostname = match hostname.into_string() {
-        Ok(s) => s,
-        Err(_) => bail!("Hostname is not valid UTF-8"),
-    };
-
     let display = ParsedDisplay {
-        host: hostname,
+        host: "".into(),
         protocol: None,
         display: **display,
         screen: 0,
@@ -206,6 +193,9 @@ pub struct Settings {
     /// If set to None, Xorg will operate without a seat.
     seat: Option<Seat>,
 
+    /// Xorg lg (verbosity) level
+    log_level: Option<u8>,
+
     /// Extra arguments to pass to Xorg
     extra_args: Option<Vec<String>>,
 
@@ -218,7 +208,7 @@ pub struct Settings {
     /// Safety:
     /// Only set if sure no other process will interact with Xauthority while in setup.
     /// Usage with `xauthority_path` unset is generally unsafe.
-    unsafe_skip_locks: Option<bool>,
+    unsafe_skip_xauth_locks: Option<bool>,
 
     /// Override paths used for Xresources loading.
     #[cfg(feature = "xrdb")]
@@ -227,7 +217,6 @@ pub struct Settings {
 
 pub struct XShim {
     pub xorg_child: std::process::Child,
-    pub logger: PipeReader,
     pub client_env: (Display, ClientAuthorityEnv, Option<WindowPath>),
     #[cfg(feature = "client")]
     pub connection: XConnection,
@@ -235,22 +224,27 @@ pub struct XShim {
 
 /// See `setup_xorg` for documentation
 // TODO: optionally switch user on spawn
+// (internal) Setup flow:
+// - parse settings, environment
+// - set up server authority (private memfd)
+// - spawn Xorg
+// - wait for Xorg to provide a display
+// - set up client authority
+// - (optional) connect
 pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
     let env = settings.env.take().unwrap_or(OsEnv::new_view().into());
 
     let vt = settings.vt.or(env.get().ok());
     let seat = settings.seat.or(env.get().ok());
     let hostname = settings.hostname.unwrap_or(hostname::current());
+    let log_level = settings.log_level.unwrap_or(3);
+    let skip_locks = settings.unsafe_skip_xauth_locks.unwrap_or(false);
 
     let window_path = vt.as_ref().map(|vt| WindowPath::previous_plus_vt(&env, vt));
 
-    let authority_manager = XAuthorityManager::new(
-        settings.unsafe_skip_locks.unwrap_or(false),
-        &settings.xauthority_path,
-        &env,
-        hostname,
-    )
-    .context("Cannot setup XAuthority manager")?;
+    let authority_manager =
+        XAuthorityManager::new(skip_locks, &settings.xauthority_path, &env, hostname)
+            .context("Cannot setup XAuthority manager")?;
 
     let server_authority = authority_manager
         .setup_server()
@@ -260,10 +254,10 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
 
     xorg.maybe_vt(vt)
         .maybe_seat(seat)
-        .authority(server_authority);
+        .authority(server_authority)
+        .logging(log_level);
 
     let future_display = xorg.display_receiver()?;
-    let logger = xorg.logging(3)?; // TODO: setting
 
     let xorg_child = xorg
         .finish(settings.extra_args.unwrap_or_default())
@@ -276,10 +270,10 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
         .setup_client(&display)
         .context("Failed to define client authority")?;
 
-    let (hostname, cookie) = authority_manager.finalize();
+    let cookie = authority_manager.finalize_into_cookie();
 
     #[cfg(any(feature = "client", feature = "xrdb"))]
-    let connection = xorg_connection(hostname, &display, &cookie)?;
+    let connection = xorg_connection(&display, &cookie)?;
 
     // TODO: xrdb
 
@@ -287,7 +281,6 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
 
     Ok(XShim {
         xorg_child,
-        logger,
         client_env: (display, client_authority, window_path),
 
         // returns the connection if "client" feature is toggled, drops otherwise
@@ -296,7 +289,7 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
     })
 }
 
-/// This function block the current thread until setup is finished and Xorg provides a display
+/// This function will block the current thread until setup is finished and Xorg provides a display
 ///
 /// Should be called from the context of the session user, *not* the root user
 /// (Xorg as root is discouraged)

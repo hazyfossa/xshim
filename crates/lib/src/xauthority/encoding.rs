@@ -76,7 +76,6 @@ impl From<Scope> for (Family, Hostname) {
     fn from(value: Scope) -> Self {
         match value {
             Scope::Local(hostname) => (Family::Local, hostname),
-            // TODO: address in little-endian
             Scope::Any => (Family::Wild, "127.0.0.2".into()),
         }
     }

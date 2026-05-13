@@ -216,7 +216,7 @@ async fn main() -> Result<()> {
             .extra_args(args.xorg_args)
             .maybe_vt(context.vt_number)
             .maybe_seat(context.seat)
-            .unsafe_skip_locks(args.skip_locks)
+            .unsafe_skip_xauth_locks(args.skip_locks)
             .build(),
     )
     .context("Failed to setup Xorg")?;

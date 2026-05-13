@@ -86,8 +86,8 @@ impl XAuthorityManager {
     }
 
     pub fn setup_client(&self, display: &Display) -> Result<ClientAuthorityEnv> {
-        // TODO: add proper note why we do two entries
-        // (legacy apps + hostname changes)
+        // The local entry is for applications which may not support wildcard authority
+        // The wildcard entry exists so client do not break on hostname change
 
         let authority = [
             Entry::new(
@@ -123,7 +123,7 @@ impl XAuthorityManager {
         Ok(path.clone().into())
     }
 
-    pub fn finalize(self) -> (Hostname, Cookie) {
-        (self.hostname, self.cookie)
+    pub fn finalize_into_cookie(self) -> Cookie {
+        self.cookie
     }
 }
