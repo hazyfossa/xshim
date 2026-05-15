@@ -3,7 +3,7 @@ use std::{
     io::{BufRead, BufReader, PipeReader, pipe},
     os::fd::AsRawFd,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
 };
 
 use envy::{Get, OsEnv, container::EnvBuf, define_env};
@@ -16,7 +16,7 @@ use crate::{
         private_file::SealedPrivateFile,
         subprocess::CleanupExt,
     },
-    xauthority::{ClientAuthorityEnv, XAuthorityManager},
+    xauthority::{ClientAuthorityEnv, ClientAuthoritySettings},
 };
 
 mod utils;
@@ -62,81 +62,66 @@ impl DisplayReceiver {
     }
 }
 
-struct XorgBuilder {
-    command: Command,
-    fd_context: FdContext,
-}
+fn prepare_xorg(
+    path: PathBuf,
+    vt: Option<VtNumber>,
+    seat: Option<Seat>,
+    authority: SealedPrivateFile,
+    log_level: u8,
+    extra_args: Option<Vec<String>>,
+) -> Result<(DisplayReceiver, Command)> {
+    let mut fd_ctx = FdContext::new();
+    let mut command = Command::new(path);
 
-impl XorgBuilder {
-    fn new(path: PathBuf) -> Self {
-        let mut command = Command::new(path);
+    // Defaults
+    command
+        .args(["-background", "none", "-noreset", "-keeptty"])
+        .args(["-nolisten", "tcp"])
+        .envs([("XORG_RUN_AS_USER_OK", "1")]);
 
-        // Defaults
-        command
-            .args(["-background", "none", "-noreset", "-keeptty"])
-            .args(["-nolisten", "tcp"])
-            .envs([("XORG_RUN_AS_USER_OK", "1")]);
+    // vt/seat
 
-        Self {
-            command,
-            fd_context: FdContext::new(),
-        }
+    if let Some(vt) = vt {
+        command.arg(format!("vt{}", vt.0)).arg("-novtswitch");
+    };
+
+    if let Some(seat) = seat {
+        command.args(["-seat", &seat]);
+    };
+
+    // authority
+
+    let passed_authority = fd_ctx.pass(authority.into_inner());
+    command.args(["-auth".into(), passed_authority.path()]);
+
+    // logging
+
+    command
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .arg("-logfile /dev/null")
+        .args(["-verbose", &log_level.to_string()]);
+
+    // display receiver
+
+    let (rx, tx) = pipe().context("Failed to open pipe for display fd")?;
+    let display_fd = fd_ctx.pass(tx.into());
+    let display_rx = DisplayReceiver(rx);
+    command.args(["-displayfd", &display_fd.as_raw_fd().to_string()]);
+
+    // other
+
+    if let Some(extra_args) = extra_args {
+        command.args(extra_args);
     }
 
-    fn maybe_vt(&mut self, vt: Option<VtNumber>) -> &mut Self {
-        if let Some(vt) = vt {
-            self.command.arg(format!("vt{}", vt.0)).arg("-novtswitch");
-        };
+    command.with_fd_context(fd_ctx).with_cleanup();
 
-        self
-    }
-
-    fn maybe_seat(&mut self, seat: Option<Seat>) -> &mut Self {
-        if let Some(seat) = seat {
-            self.command.args(["-seat", &seat]);
-        };
-
-        self
-    }
-
-    fn authority(&mut self, authority: SealedPrivateFile) -> &mut Self {
-        let passed = self.fd_context.pass(authority.into_inner());
-        self.command.args(["-auth".into(), passed.path()]);
-        self
-    }
-
-    fn logging(&mut self, level: u8) -> &mut Self {
-        self.command
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .arg("-logfile /dev/null")
-            .args(["-verbose", &level.to_string()]);
-
-        self
-    }
-
-    fn display_receiver(&mut self) -> Result<DisplayReceiver> {
-        let (rx, tx) = pipe().context("Failed to open pipe for display fd")?;
-        let tx_passed = self.fd_context.pass(tx.into());
-
-        self.command
-            .args(["-displayfd", &tx_passed.as_raw_fd().to_string()]);
-
-        Ok(DisplayReceiver(rx))
-    }
-
-    fn finish(mut self, extra_args: Vec<String>) -> Command {
-        self.command
-            .args(extra_args)
-            .with_fd_context(self.fd_context)
-            .with_cleanup();
-
-        self.command
-    }
+    Ok((display_rx, command))
 }
 
 #[cfg(feature = "client")]
-fn xorg_connection(
+fn connect_xorg(
     display: &Display,
     cookie: &xauthority::Cookie,
 ) -> Result<x11rb::rust_connection::RustConnection> {
@@ -163,6 +148,40 @@ fn xorg_connection(
     });
 
     conn.ok_or_eyre("Failed to connect to Xorg")
+}
+
+pub struct PendingDisplay {
+    display_receiver: DisplayReceiver,
+    cookie: xauthority::Cookie,
+    client_authority_settings: xauthority::ClientAuthoritySettings,
+}
+
+impl PendingDisplay {
+    /// This function will block the current thread until Xorg provides a display
+    /// It will then finish the session setup
+    pub fn wait_for_display(self) -> Result<XSession> {
+        let display = self.display_receiver.blocking_wait()?;
+
+        let client_authority =
+            xauthority::setup_client(self.client_authority_settings, &self.cookie, &display)
+                .context("Failed to setup client authority")?;
+
+        #[cfg(feature = "client")]
+        let connection =
+            connect_xorg(&display, &self.cookie).context("Failed to connect to Xorg")?;
+
+        Ok(XSession {
+            client_env: (display, client_authority),
+            #[cfg(feature = "client")]
+            connection,
+        })
+    }
+}
+
+pub struct XSession {
+    pub client_env: (Display, ClientAuthorityEnv),
+    #[cfg(feature = "client")]
+    pub connection: XConnection,
 }
 
 #[derive(Default)]
@@ -203,78 +222,57 @@ pub struct Settings {
     unsafe_skip_xauth_locks: Option<bool>,
 }
 
-pub struct XShim {
-    pub xorg_child: std::process::Child,
-    pub client_env: (Display, ClientAuthorityEnv),
-    #[cfg(feature = "client")]
-    pub connection: XConnection,
-}
-
 /// See `setup_xorg` for documentation
 // TODO: optionally switch user on spawn
-// (internal) Setup flow:
-// - parse settings, environment
-// - set up server authority (private memfd)
-// - spawn Xorg
-// - wait for Xorg to provide a display
-// - set up client authority
-// - (optional) connect
-pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
+pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<(Child, PendingDisplay)> {
     let env = settings.env.take().unwrap_or(OsEnv::new_view().into());
 
     let vt = settings.vt.or(env.get().ok());
     let seat = settings.seat.or(env.get().ok());
     let hostname = settings.hostname.unwrap_or(hostname::current());
+    let xorg_path = settings.path.unwrap_or(DEFAULT_XORG_PATH.into());
     let log_level = settings.log_level.unwrap_or(3);
     let skip_locks = settings.unsafe_skip_xauth_locks.unwrap_or(false);
+    let xauthority_path = settings
+        .xauthority_path
+        .unwrap_or(xauthority::get_xauthority_path(&env)?);
 
-    let authority_manager =
-        XAuthorityManager::new(skip_locks, &settings.xauthority_path, &env, hostname)
-            .context("Cannot setup XAuthority manager")?;
+    let (server_authority, cookie) =
+        xauthority::setup_server().context("Failed to define server authority")?;
 
-    let server_authority = authority_manager
-        .setup_server()
-        .context("Failed to define server authority")?;
+    let client_authority_settings = ClientAuthoritySettings {
+        xauthority_path,
+        hostname,
+        skip_locks,
+    };
 
-    let mut xorg = XorgBuilder::new(settings.path.unwrap_or(DEFAULT_XORG_PATH.into()));
+    let (display_receiver, mut xorg) = prepare_xorg(
+        xorg_path,
+        vt,
+        seat,
+        server_authority,
+        log_level,
+        settings.extra_args,
+    )?;
 
-    xorg.maybe_vt(vt)
-        .maybe_seat(seat)
-        .authority(server_authority)
-        .logging(log_level);
+    let xorg_child = xorg.spawn().context("Failed to spawn Xorg")?;
 
-    let future_display = xorg.display_receiver()?;
-
-    let xorg_child = xorg
-        .finish(settings.extra_args.unwrap_or_default())
-        .spawn()
-        .context("Failed to spawn Xorg")?;
-
-    let display = future_display.blocking_wait()?;
-
-    let client_authority = authority_manager
-        .setup_client(&display)
-        .context("Failed to define client authority")?;
-
-    let cookie = authority_manager.finalize_into_cookie();
-
-    #[cfg(feature = "client")]
-    let connection = xorg_connection(&display, &cookie)?;
-
-    drop(cookie);
-
-    Ok(XShim {
+    Ok((
         xorg_child,
-        client_env: (display, client_authority),
-        #[cfg(feature = "client")]
-        connection,
-    })
+        PendingDisplay {
+            display_receiver,
+            cookie,
+            client_authority_settings,
+        },
+    ))
 }
-
-/// This function will block the current thread until setup is finished and Xorg provides a display
+/// Returns (xorg_child, pending_display)
+/// `PendingDisplay can then be (a)waited for and resolved into a session`
+///
+/// stderr is always guarateed to be available for `xorg_child`
 ///
 /// Should be called from the context of the session user, *not* the root user
 /// (Xorg as root is discouraged)
-pub fn setup_xorg() -> Result<XShim> {
+pub fn setup_xorg() -> Result<(Child, PendingDisplay)> {
     setup_xorg_with_settings(Settings::default())
 }

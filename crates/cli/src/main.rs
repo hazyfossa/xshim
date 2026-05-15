@@ -254,7 +254,7 @@ async fn main() -> Result<()> {
         ModeSubcommand::XinitCompat(mode) => mode.run_ext(context.vt_number.as_ref(), &env),
     }?;
 
-    let xshim = libxshim::setup_xorg_with_settings(
+    let (xorg, future_session) = libxshim::setup_xorg_with_settings(
         libxshim::Settings::builder()
             .env(env)
             .maybe_path(args.xorg_path)
@@ -266,8 +266,13 @@ async fn main() -> Result<()> {
     )
     .context("Failed to setup Xorg")?;
 
+    let logger = logger_task(xorg.stderr.unwrap())?;
+    tokio::spawn(logger);
+
+    let session = future_session.wait_for_display()?;
+
     client_command.apply((
-        xshim.client_env,
+        session.client_env,
         (diff::unset::<VtNumber>(), diff::unset::<Seat>()),
     ));
 

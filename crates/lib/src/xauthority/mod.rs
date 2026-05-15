@@ -29,7 +29,7 @@ fn make_cookie() -> Result<Cookie> {
     Ok(Cookie::new(cookie_buf))
 }
 
-fn get_xauthority_path(env: &impl envy::Get) -> Result<PathBuf> {
+pub fn get_xauthority_path(env: &impl envy::Get) -> Result<PathBuf> {
     env.get::<ClientAuthorityEnv>()
         .map(|v| v.0)
         .or_else(|_| {
@@ -40,94 +40,70 @@ fn get_xauthority_path(env: &impl envy::Get) -> Result<PathBuf> {
             let home = env.get::<Home>()?;
             eyre::Ok(home.join(".Xauthority"))
         })
-        .context("Cannot determine an appropriate path from env")
+        .context("Cannot determine an appropriate Xauthority path")
 }
 
-// TODO: is there anything we should do when hostname changes?
-// Session should stay alive as clients fallback to local
-// Are there any side-effects? What breaks?
-pub struct XAuthorityManager {
-    skip_locks: bool,
-    xauthority_path: PathBuf,
-    cookie: Cookie,
-    hostname: Hostname,
+pub fn setup_server() -> Result<(SealedPrivateFile, Cookie)> {
+    let cookie = make_cookie().context("Failed to make cookie")?;
+
+    let file = PrivateFile::new("x-server-authority-data")
+        .context("Failed to create a private file via memfd")?;
+
+    let mut writer = NoSeek::new(file);
+    Entry::new(&cookie, Scope::Any, Target::Server { slot: 0 }).write(&mut writer)?;
+
+    let file = writer
+        .into_inner()
+        .seal()
+        .context("Failed to seal the private file")?;
+
+    Ok((file, cookie))
 }
 
-impl XAuthorityManager {
-    pub fn new(
-        skip_locks: bool,
-        xauthority_path: &Option<PathBuf>,
-        env: &impl envy::Get,
-        hostname: Hostname,
-    ) -> Result<Self> {
-        let cookie = make_cookie()?;
+pub struct ClientAuthoritySettings {
+    pub xauthority_path: PathBuf,
+    pub hostname: Hostname,
+    pub skip_locks: bool,
+}
 
-        let xauthority_path = xauthority_path
-            .clone()
-            .unwrap_or(get_xauthority_path(env).context("Failed to get Xauthority path")?);
+pub fn setup_client(
+    settings: ClientAuthoritySettings,
+    cookie: &Cookie,
+    display: &Display,
+) -> Result<ClientAuthorityEnv> {
+    // The local entry is for applications which may not support wildcard authority
+    // The wildcard entry exists so client do not break on hostname change
 
-        Ok(Self {
-            skip_locks,
-            xauthority_path,
+    let authority = [
+        Entry::new(
             cookie,
-            hostname,
-        })
+            Scope::Any,
+            Target::Client {
+                display_number: **display,
+            },
+        ),
+        Entry::new(
+            cookie,
+            Scope::Local(settings.hostname.clone()),
+            Target::Client {
+                display_number: **display,
+            },
+        ),
+    ];
+
+    let path = settings.xauthority_path;
+
+    let mut xauth_file = if settings.skip_locks {
+        // Safety: setting `skip_locks` means user explicitly guarantees no other
+        // party will interact with Xauthority during setup
+        unsafe { AuthorityFile::open_or_create_unlocked(&path) }
+    } else {
+        AuthorityFile::open_or_create(&path)
     }
+    .context(format!("Failed to create {path:?}"))?;
 
-    pub fn setup_server(&self) -> Result<SealedPrivateFile> {
-        let file = PrivateFile::new("x-server-authority-data")
-            .context("Failed to create a private file via memfd")?;
+    // TODO: merge, not overwrite
+    xauth_file.set(authority)?;
 
-        let mut writer = NoSeek::new(file);
-        Entry::new(&self.cookie, Scope::Any, Target::Server { slot: 0 }).write(&mut writer)?;
-
-        let file = writer
-            .into_inner()
-            .seal()
-            .context("Failed to seal the private file")?;
-
-        Ok(file)
-    }
-
-    pub fn setup_client(&self, display: &Display) -> Result<ClientAuthorityEnv> {
-        // The local entry is for applications which may not support wildcard authority
-        // The wildcard entry exists so client do not break on hostname change
-
-        let authority = [
-            Entry::new(
-                &self.cookie,
-                Scope::Any,
-                Target::Client {
-                    display_number: **display,
-                },
-            ),
-            Entry::new(
-                &self.cookie,
-                Scope::Local(self.hostname.clone()),
-                Target::Client {
-                    display_number: **display,
-                },
-            ),
-        ];
-
-        let path = &self.xauthority_path;
-
-        let mut xauth_file = if self.skip_locks {
-            // Safety: setting `skip_locks` means user explicitly guarantees no other
-            // party will interact with Xauthority during setup
-            unsafe { AuthorityFile::open_or_create_unlocked(path) }
-        } else {
-            AuthorityFile::open_or_create(path)
-        }
-        .context(format!("Failed to create {path:?}"))?;
-
-        // TODO: merge, not overwrite
-        xauth_file.set(authority)?;
-
-        Ok(path.clone().into())
-    }
-
-    pub fn finalize_into_cookie(self) -> Cookie {
-        self.cookie
-    }
+    Ok(path.into())
 }
