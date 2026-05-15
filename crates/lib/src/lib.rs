@@ -31,19 +31,11 @@ pub use x11rb::rust_connection::RustConnection as XConnection;
 const DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 
 define_env!(pub Seat(String) = "XDG_SEAT");
-define_env!(pub VtNumber(u32) = "XDG_VTNR");
+define_env!(
+    #[derive(Copy)]
+    pub VtNumber(u32) = "XDG_VTNR"
+);
 define_env!(pub Display(u16) = "DISPLAY");
-define_env!(pub WindowPath(String) = "WINDOWPATH");
-
-impl WindowPath {
-    fn previous_plus_vt(env: &impl envy::Get, vt: &VtNumber) -> Self {
-        let previous = env.get::<Self>();
-        Self(match previous {
-            Ok(path) => format!("{}:{}", path.0, vt.0),
-            Err(_) => vt.to_string(),
-        })
-    }
-}
 
 struct DisplayReceiver(PipeReader);
 
@@ -217,7 +209,7 @@ pub struct Settings {
 
 pub struct XShim {
     pub xorg_child: std::process::Child,
-    pub client_env: (Display, ClientAuthorityEnv, Option<WindowPath>),
+    pub client_env: (Display, ClientAuthorityEnv),
     #[cfg(feature = "client")]
     pub connection: XConnection,
 }
@@ -239,8 +231,6 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
     let hostname = settings.hostname.unwrap_or(hostname::current());
     let log_level = settings.log_level.unwrap_or(3);
     let skip_locks = settings.unsafe_skip_xauth_locks.unwrap_or(false);
-
-    let window_path = vt.as_ref().map(|vt| WindowPath::previous_plus_vt(&env, vt));
 
     let authority_manager =
         XAuthorityManager::new(skip_locks, &settings.xauthority_path, &env, hostname)
@@ -281,7 +271,7 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
 
     Ok(XShim {
         xorg_child,
-        client_env: (display, client_authority, window_path),
+        client_env: (display, client_authority),
 
         // returns the connection if "client" feature is toggled, drops otherwise
         #[cfg(feature = "client")]

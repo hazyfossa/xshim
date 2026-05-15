@@ -11,25 +11,22 @@ use std::{
 };
 
 use argh::FromArgs;
-use enum_dispatch::enum_dispatch;
-use envy::{Get, OsEnv, Set, define_env, diff};
+use envy::{Set, define_env, diff};
 use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result};
 use freedesktop_session_parser::{SessionKind, get_session_entry};
 use tokio::io::AsyncBufReadExt;
 
 use crate::{
     context::ContextMode,
-    systemd::{journald, notify::Notifier},
+    systemd::{
+        journald::{self, LogLevel},
+        notify::Notifier,
+    },
     utils::{path::EnsureExistsExt, warn::WarnExt},
 };
 
 use lib::{Seat, VtNumber, subprocess::CleanupExt};
 use libxshim as lib;
-
-#[enum_dispatch]
-trait Mode {
-    fn run(self) -> Result<Command>;
-}
 
 #[derive(FromArgs)]
 #[argh(subcommand, name = "run")]
@@ -40,9 +37,21 @@ struct DirectMode {
     executable: PathBuf,
 }
 
-impl Mode for DirectMode {
+impl DirectMode {
     fn run(self) -> Result<Command> {
         Ok(Command::new(self.executable))
+    }
+}
+
+define_env!(pub WindowPath(String) = "WINDOWPATH");
+
+impl WindowPath {
+    fn previous_plus_vt(env: &impl envy::Get, vt: &VtNumber) -> Self {
+        let previous = env.get::<Self>();
+        Self(match previous {
+            Ok(path) => format!("{}:{}", *path, **vt),
+            Err(_) => vt.to_string(),
+        })
     }
 }
 
@@ -54,9 +63,9 @@ struct XinitCompatMode {}
 // TODO: support XSERVERRC? Requires changes to mode trait
 define_env!(pub XinitRC(PathBuf) = #raw "XINITRC");
 
-impl Mode for XinitCompatMode {
-    fn run(self) -> Result<Command> {
-        let rc_env = OsEnv::new_view().get::<XinitRC>().map(|var| var.0);
+impl XinitCompatMode {
+    fn run_ext(self, vt: Option<&VtNumber>, env: &impl envy::Get) -> Result<Command> {
+        let rc_env = env.get::<XinitRC>().map(|var| var.0);
 
         let rc_user = || {
             home_dir()
@@ -67,31 +76,39 @@ impl Mode for XinitCompatMode {
 
         let rc_system = || PathBuf::from("/etc/X11/xinit/xinitrc").ensure_exists();
 
-        let client_path = match rc_env.or_else(|_| rc_user()).or_else(|_| rc_system()).ok() {
-            Some(path) => path,
+        let client_path = rc_env.or_else(|_| rc_user()).or_else(|_| rc_system()).ok();
+
+        let mut client_command = match client_path {
             None => {
                 warn!("Cannot find xinit RC, using xterm as fallback client");
                 let mut xterm = Command::new("xterm");
                 xterm.args(["-geometry", "+1+1", "-n", "login"]);
+                xterm
+            }
 
-                return Ok(xterm);
+            Some(path) => {
+                let permissions = fs::metadata(&path)
+                    .context("Cannot find client executable")?
+                    .permissions();
+
+                let is_executable = permissions.mode() & 0o111 != 0;
+
+                match is_executable {
+                    true => Command::new(&path),
+                    false => {
+                        let mut shell = Command::new("/bin/sh");
+                        shell.arg(path);
+                        shell
+                    }
+                }
             }
         };
 
-        let permissions = fs::metadata(&client_path)
-            .context("Cannot find client executable")?
-            .permissions();
+        if let Some(vt) = vt {
+            client_command.set(WindowPath::previous_plus_vt(env, vt));
+        }
 
-        let is_executable = permissions.mode() & 0o111 != 0;
-
-        Ok(match is_executable {
-            true => Command::new(client_path),
-            false => {
-                let mut shell = Command::new("/bin/sh");
-                shell.arg(client_path);
-                shell
-            }
-        })
+        Ok(client_command)
     }
 }
 
@@ -105,7 +122,7 @@ pub struct SessionMode {
     name: String,
 }
 
-impl Mode for SessionMode {
+impl SessionMode {
     fn run(self) -> Result<Command> {
         let session = get_session_entry(SessionKind::X11, &self.name)
             .context("Error while reading session definition")?;
@@ -132,7 +149,6 @@ impl Mode for SessionMode {
     }
 }
 
-#[enum_dispatch(Mode)]
 #[derive(FromArgs)]
 #[argh(subcommand)]
 enum ModeSubcommand {
@@ -195,19 +211,21 @@ fn _help_skip_locks() {
     )
 }
 
-// fn logger_task(stderr: ChildStderr) -> Result<impl Future<Output = Result<()>>> {
-//     let stderr = tokio::process::ChildStderr::from_std(stderr)
-//         .context("Failed to set stderr pipe as async")?;
+fn logger_task(stderr: ChildStderr) -> Result<impl Future<Output = Result<()>>> {
+    let stderr = tokio::process::ChildStderr::from_std(stderr)
+        .context("Failed to set stderr pipe as async")?;
 
-//     let mut logger = tokio::io::BufReader::new(stderr).lines();
+    let mut reader = tokio::io::BufReader::new(stderr).lines();
+    let writer = journald::JournalWriter::new()?;
 
-//     Ok(async move {
-//         while let Some(line) = logger.next_line().await? {
-//             eprintln!("{line}")
-//         }
-//         Ok(())
-//     })
-// }
+    Ok(async move {
+        while let Some(line) = reader.next_line().await? {
+            // TODO: parse log level
+            writer.log(LogLevel::Notice, &line)?;
+        }
+        Ok(())
+    })
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -230,6 +248,12 @@ async fn main() -> Result<()> {
         false => None,
     };
 
+    let mut client_command = match args.mode {
+        ModeSubcommand::Direct(mode) => mode.run(),
+        ModeSubcommand::Session(mode) => mode.run(),
+        ModeSubcommand::XinitCompat(mode) => mode.run_ext(context.vt_number.as_ref(), &env),
+    }?;
+
     let xshim = libxshim::setup_xorg_with_settings(
         libxshim::Settings::builder()
             .env(env)
@@ -242,18 +266,16 @@ async fn main() -> Result<()> {
     )
     .context("Failed to setup Xorg")?;
 
-    let mut client = args.mode.run()?;
-
-    client.apply((
+    client_command.apply((
         xshim.client_env,
         (diff::unset::<VtNumber>(), diff::unset::<Seat>()),
     ));
 
     if let Some(context_env) = context.env_diff {
-        client.apply(context_env.into_diff());
+        client_command.apply(context_env.into_diff());
     }
 
-    let mut client_child = client
+    let mut client_child = client_command
         .with_cleanup()
         .spawn()
         .context("Failed to spawn client")?;
