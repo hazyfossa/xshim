@@ -14,7 +14,7 @@ use crate::utils::send_fds::SendFds;
 static JOURNAL: OnceLock<JournalWriter> = OnceLock::new();
 const JOURNALD_PATH: &str = "/run/systemd/journal/socket";
 
-pub fn init_journald() -> Result<()> {
+pub fn init() -> Result<()> {
     let writer = JournalWriter::new()?;
     JOURNAL.set(writer).ok().context("Already initialized")
 }

@@ -193,7 +193,7 @@ pub struct Settings {
     /// If set to None, Xorg will operate without a seat.
     seat: Option<Seat>,
 
-    /// Xorg lg (verbosity) level
+    /// Xorg log (verbosity) level
     log_level: Option<u8>,
 
     /// Extra arguments to pass to Xorg

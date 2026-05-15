@@ -80,7 +80,11 @@ impl XAuthorityManager {
 
         let mut writer = NoSeek::new(file);
         Entry::new(&self.cookie, Scope::Any, Target::Server { slot: 0 }).write(&mut writer)?;
-        let file = writer.into_inner().seal()?;
+
+        let file = writer
+            .into_inner()
+            .seal()
+            .context("Failed to seal the private file")?;
 
         Ok(file)
     }

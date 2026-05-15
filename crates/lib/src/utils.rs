@@ -165,7 +165,10 @@ pub mod private_file {
         }
 
         pub fn seal(self) -> Result<SealedPrivateFile, Errno> {
-            fcntl_add_seals(&self.0, SealFlags::all())?;
+            fcntl_add_seals(
+                &self.0,
+                SealFlags::GROW | SealFlags::SHRINK | SealFlags::WRITE | SealFlags::SEAL,
+            )?;
             Ok(SealedPrivateFile(self.0))
         }
     }
