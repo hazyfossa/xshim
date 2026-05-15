@@ -174,7 +174,7 @@ fn xorg_connection(
 }
 
 #[derive(Default)]
-#[cfg_attr(feature = "settings", derive(bon::Builder))]
+#[cfg_attr(feature = "bon", derive(bon::Builder))]
 pub struct Settings {
     /// Path to Xorg binary
     path: Option<PathBuf>,

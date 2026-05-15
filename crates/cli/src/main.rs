@@ -2,13 +2,20 @@ mod context;
 mod systemd;
 mod utils;
 
-use std::{env::home_dir, fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Command};
+use std::{
+    env::home_dir,
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::PathBuf,
+    process::{ChildStderr, Command},
+};
 
 use argh::FromArgs;
 use enum_dispatch::enum_dispatch;
 use envy::{Get, OsEnv, Set, define_env, diff};
 use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result};
 use freedesktop_session_parser::{SessionKind, get_session_entry};
+use tokio::io::AsyncBufReadExt;
 
 use crate::{
     context::ContextMode,
@@ -188,6 +195,20 @@ fn _help_skip_locks() {
     )
 }
 
+// fn logger_task(stderr: ChildStderr) -> Result<impl Future<Output = Result<()>>> {
+//     let stderr = tokio::process::ChildStderr::from_std(stderr)
+//         .context("Failed to set stderr pipe as async")?;
+
+//     let mut logger = tokio::io::BufReader::new(stderr).lines();
+
+//     Ok(async move {
+//         while let Some(line) = logger.next_line().await? {
+//             eprintln!("{line}")
+//         }
+//         Ok(())
+//     })
+// }
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     simple_eyre::install()?;
@@ -198,7 +219,7 @@ async fn main() -> Result<()> {
         .context("Failed to resolve environment")?;
 
     // TODO: make this non-fatal, fallback to stderr
-    journald::init_journald().context("Failed to initialize journald client")?;
+    journald::init().context("Failed to initialize journald client")?;
 
     let context = context::aqquire(&args)
         .await

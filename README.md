@@ -25,7 +25,7 @@ xshim is not:
 # features
 
 library:
-- settings: enables extensive configuration
+- bon: generates a builder for the configuration
 - client: makes your app an Xorg client after setup
 - xrdb (WIP): loads Xresources
 
