@@ -135,7 +135,7 @@ impl XorgBuilder {
     }
 }
 
-#[cfg(any(feature = "client", feature = "xrdb"))]
+#[cfg(feature = "client")]
 fn xorg_connection(
     display: &Display,
     cookie: &xauthority::Cookie,
@@ -201,10 +201,6 @@ pub struct Settings {
     /// Only set if sure no other process will interact with Xauthority while in setup.
     /// Usage with `xauthority_path` unset is generally unsafe.
     unsafe_skip_xauth_locks: Option<bool>,
-
-    /// Override paths used for Xresources loading.
-    #[cfg(feature = "xrdb")]
-    resources: Option<Vec<PathBuf>>,
 }
 
 pub struct XShim {
@@ -262,18 +258,14 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
 
     let cookie = authority_manager.finalize_into_cookie();
 
-    #[cfg(any(feature = "client", feature = "xrdb"))]
+    #[cfg(feature = "client")]
     let connection = xorg_connection(&display, &cookie)?;
-
-    // TODO: xrdb
 
     drop(cookie);
 
     Ok(XShim {
         xorg_child,
         client_env: (display, client_authority),
-
-        // returns the connection if "client" feature is toggled, drops otherwise
         #[cfg(feature = "client")]
         connection,
     })

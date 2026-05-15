@@ -14,8 +14,7 @@ x11rb = { version = "0.13.2", default-features = false, features = [
 zeroize = { version = "1.8.2", features = ["derive"] }
 
 [features]
-default = ["bon", "xrdb"]
+default = ["bon"]
 
 bon = ["dep:bon"]
-xrdb = ["dep:x11rb"]
 client = ["dep:x11rb"]

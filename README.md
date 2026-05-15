@@ -27,7 +27,6 @@ xshim is not:
 library:
 - bon: generates a builder for the configuration
 - client: makes your app an Xorg client after setup
-- xrdb (WIP): loads Xresources
 
 cli:
 - dbus: required feature for full systemd intergration (env, transient units)
