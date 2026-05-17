@@ -9,8 +9,7 @@ bon = { version = "3.9.1", optional = true }
 envy = { git = "https://github.com/hazyfossa/envy.git", version = "0.1.0" }
 eyre = { version = "0.6.12", default-features = false }
 rustix = { version = "1.1.4", features = ["process", "rand", "system"] }
-x11rb = { version = "0.13.2", default-features = false, features = [
-], optional = true }
+x11rb = { version = "0.13.2", default-features = false, optional = true }
 zeroize = { version = "1.8.2", features = ["derive"] }
 
 [features]

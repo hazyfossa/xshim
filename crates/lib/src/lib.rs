@@ -31,10 +31,7 @@ pub use x11rb::rust_connection::RustConnection as XConnection;
 const DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 
 define_env!(pub Seat(String) = "XDG_SEAT");
-define_env!(
-    #[derive(Copy)]
-    pub VtNumber(u32) = "XDG_VTNR"
-);
+define_env!(pub VtNumber(u32) = "XDG_VTNR");
 define_env!(pub Display(u16) = "DISPLAY");
 
 struct DisplayReceiver(PipeReader);
@@ -150,15 +147,27 @@ fn connect_xorg(
     conn.ok_or_eyre("Failed to connect to Xorg")
 }
 
-pub struct PendingDisplay {
+pub struct PendingDisplay {}
+
+pub struct XShim {
+    pub xorg_command: Command,
     display_receiver: DisplayReceiver,
     cookie: xauthority::Cookie,
     client_authority_settings: xauthority::ClientAuthoritySettings,
 }
 
-impl PendingDisplay {
+impl XShim {
     /// This function will block the current thread until Xorg provides a display
-    /// It will then finish the session setup
+    ///
+    /// If you want more control, consider spawning `xorg_command` manually
+    /// and using `self.wait_for_display` instead
+    pub fn spawn(mut self) -> Result<(Child, XSession)> {
+        let child = self.xorg_command.spawn().context("Failed to spawn Xorg")?;
+        Ok((child, self.wait_for_display()?))
+    }
+
+    /// This function will block the current thread until Xorg provides a display
+    /// This also means it will deadlock if `xorg_command` is not spawned
     pub fn wait_for_display(self) -> Result<XSession> {
         let display = self.display_receiver.blocking_wait()?;
 
@@ -224,7 +233,7 @@ pub struct Settings {
 
 /// See `setup_xorg` for documentation
 // TODO: optionally switch user on spawn
-pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<(Child, PendingDisplay)> {
+pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
     let env = settings.env.take().unwrap_or(OsEnv::new_view().into());
 
     let vt = settings.vt.or(env.get().ok());
@@ -246,7 +255,7 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<(Child, Pendin
         skip_locks,
     };
 
-    let (display_receiver, mut xorg) = prepare_xorg(
+    let (display_receiver, xorg) = prepare_xorg(
         xorg_path,
         vt,
         seat,
@@ -255,16 +264,12 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<(Child, Pendin
         settings.extra_args,
     )?;
 
-    let xorg_child = xorg.spawn().context("Failed to spawn Xorg")?;
-
-    Ok((
-        xorg_child,
-        PendingDisplay {
-            display_receiver,
-            cookie,
-            client_authority_settings,
-        },
-    ))
+    Ok(XShim {
+        xorg_command: xorg,
+        display_receiver,
+        cookie,
+        client_authority_settings,
+    })
 }
 /// Returns (xorg_child, pending_display)
 /// `PendingDisplay can then be (a)waited for and resolved into a session`
@@ -273,6 +278,6 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<(Child, Pendin
 ///
 /// Should be called from the context of the session user, *not* the root user
 /// (Xorg as root is discouraged)
-pub fn setup_xorg() -> Result<(Child, PendingDisplay)> {
+pub fn setup_xorg() -> Result<XShim> {
     setup_xorg_with_settings(Settings::default())
 }
