@@ -16,7 +16,7 @@ use crate::{
         private_file::SealedPrivateFile,
         subprocess::CleanupExt,
     },
-    xauthority::{ClientAuthorityEnv, ClientAuthoritySettings},
+    xauthority::{ClientAuthority, ClientAuthoritySettings, Cookie},
 };
 
 mod utils;
@@ -169,28 +169,38 @@ impl XShim {
     /// This function will block the current thread until Xorg provides a display
     /// This also means it will deadlock if `xorg_command` is not spawned
     pub fn wait_for_display(self) -> Result<XSession> {
+        let cookie = self.cookie;
         let display = self.display_receiver.blocking_wait()?;
 
         let client_authority =
-            xauthority::setup_client(self.client_authority_settings, &self.cookie, &display)
+            xauthority::setup_client(self.client_authority_settings, &cookie, &display)
                 .context("Failed to setup client authority")?;
 
-        #[cfg(feature = "client")]
-        let connection =
-            connect_xorg(&display, &self.cookie).context("Failed to connect to Xorg")?;
-
         Ok(XSession {
-            client_env: (display, client_authority),
+            display,
+            client_authority,
             #[cfg(feature = "client")]
-            connection,
+            cookie,
         })
     }
 }
 
 pub struct XSession {
-    pub client_env: (Display, ClientAuthorityEnv),
+    display: Display,
+    client_authority: ClientAuthority,
     #[cfg(feature = "client")]
-    pub connection: XConnection,
+    cookie: Cookie,
+}
+
+impl XSession {
+    #[cfg(feature = "client")]
+    pub fn connect(&self) -> Result<XConnection> {
+        connect_xorg(&self.display, &self.cookie).context("Failed to connect to Xorg")
+    }
+
+    pub fn client_env(self) -> (Display, ClientAuthority) {
+        (self.display, self.client_authority)
+    }
 }
 
 #[derive(Default)]

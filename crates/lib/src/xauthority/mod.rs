@@ -21,7 +21,7 @@ use crate::{
 };
 
 define_env!(pub Home(PathBuf) = #raw "HOME");
-define_env!(pub ClientAuthorityEnv(PathBuf) = #raw "XAUTHORITY");
+define_env!(pub ClientAuthority(PathBuf) = #raw "XAUTHORITY");
 
 fn make_cookie() -> Result<Cookie> {
     let mut cookie_buf = [0u8; Cookie::BYTES_LEN];
@@ -30,7 +30,7 @@ fn make_cookie() -> Result<Cookie> {
 }
 
 pub fn get_xauthority_path(env: &impl envy::Get) -> Result<PathBuf> {
-    env.get::<ClientAuthorityEnv>()
+    env.get::<ClientAuthority>()
         .map(|v| v.0)
         .or_else(|_| {
             let runtime_dir = RuntimeDir::from_env(env)?;
@@ -70,7 +70,7 @@ pub fn setup_client(
     settings: ClientAuthoritySettings,
     cookie: &Cookie,
     display: &Display,
-) -> Result<ClientAuthorityEnv> {
+) -> Result<ClientAuthority> {
     // The local entry is for applications which may not support wildcard authority
     // The wildcard entry exists so client do not break on hostname change
 

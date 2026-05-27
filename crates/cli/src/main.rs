@@ -271,7 +271,7 @@ async fn main() -> Result<()> {
     tokio::spawn(logger);
 
     client_command.apply((
-        session.client_env,
+        session.client_env(),
         (diff::unset::<VtNumber>(), diff::unset::<Seat>()),
     ));
 
