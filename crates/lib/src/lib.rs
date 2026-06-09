@@ -16,12 +16,10 @@ use crate::{
         private_file::SealedPrivateFile,
         subprocess::CleanupExt,
     },
-    xauthority::{ClientAuthority, ClientAuthoritySettings, Cookie},
+    xauthority::{ClientAuthority, ClientAuthoritySettings},
 };
 
 mod utils;
-pub use utils::subprocess;
-
 mod xauthority;
 
 #[cfg(feature = "client")]
@@ -95,7 +93,6 @@ fn prepare_xorg(
 
     command
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
         .arg("-logfile /dev/null")
         .args(["-verbose", &log_level.to_string()]);
 
@@ -147,25 +144,13 @@ fn connect_xorg(
     conn.ok_or_eyre("Failed to connect to Xorg")
 }
 
-pub struct PendingDisplay {}
-
-pub struct XShim {
-    pub xorg_command: Command,
+pub struct PendingSession {
     display_receiver: DisplayReceiver,
     cookie: xauthority::Cookie,
     client_authority_settings: xauthority::ClientAuthoritySettings,
 }
 
-impl XShim {
-    /// This function will block the current thread until Xorg provides a display
-    ///
-    /// If you want more control, consider spawning `xorg_command` manually
-    /// and using `self.wait_for_display` instead
-    pub fn spawn(mut self) -> Result<(Child, XSession)> {
-        let child = self.xorg_command.spawn().context("Failed to spawn Xorg")?;
-        Ok((child, self.wait_for_display()?))
-    }
-
+impl PendingSession {
     /// This function will block the current thread until Xorg provides a display
     /// This also means it will deadlock if `xorg_command` is not spawned
     pub fn wait_for_display(self) -> Result<XSession> {
@@ -185,11 +170,27 @@ impl XShim {
     }
 }
 
+pub struct XShim {
+    pub xorg_command: Command,
+    pub pending_session: PendingSession,
+}
+
+impl XShim {
+    /// This function will block the current thread until Xorg provides a display
+    ///
+    /// If you want more control, consider spawning `xorg_command` manually
+    /// and using `self.pending_session.wait_for_display` instead
+    pub fn spawn(mut self) -> Result<(Child, XSession)> {
+        let child = self.xorg_command.spawn().context("Failed to spawn Xorg")?;
+        Ok((child, self.pending_session.wait_for_display()?))
+    }
+}
+
 pub struct XSession {
     display: Display,
     client_authority: ClientAuthority,
     #[cfg(feature = "client")]
-    cookie: Cookie,
+    cookie: xauthority::Cookie,
 }
 
 impl XSession {
@@ -243,7 +244,7 @@ pub struct Settings {
 
 /// See `setup_xorg` for documentation
 // TODO: optionally switch user on spawn
-pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
+pub fn xorg_new_with_settings(mut settings: Settings) -> Result<XShim> {
     let env = settings.env.take().unwrap_or(OsEnv::new_view().into());
 
     let vt = settings.vt.or(env.get().ok());
@@ -276,18 +277,21 @@ pub fn setup_xorg_with_settings(mut settings: Settings) -> Result<XShim> {
 
     Ok(XShim {
         xorg_command: xorg,
-        display_receiver,
-        cookie,
-        client_authority_settings,
+        pending_session: PendingSession {
+            display_receiver,
+            cookie,
+            client_authority_settings,
+        },
     })
 }
-/// Returns (xorg_child, pending_display)
-/// `PendingDisplay can then be (a)waited for and resolved into a session`
+
+/// Returns a handle to a prepared instance.
+/// Think of it as a better `Command::new("Xorg")`
 ///
-/// stderr is always guarateed to be available for `xorg_child`
+/// You can resolve the handle into a running Xorg process via `.spawn()`
+/// Or spawn `.xorg_command` manually, then call `.wait_for_display()`
 ///
-/// Should be called from the context of the session user, *not* the root user
-/// (Xorg as root is discouraged)
-pub fn setup_xorg() -> Result<XShim> {
-    setup_xorg_with_settings(Settings::default())
+/// See `xorg_new_with_settings` if you want control over the instance.
+pub fn xorg_new() -> Result<XShim> {
+    xorg_new_with_settings(Settings::default())
 }

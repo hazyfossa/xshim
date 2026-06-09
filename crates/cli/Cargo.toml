@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 argh = { version = "0.1.16", default-features = false, features = ["help"] }
-envy = { git = "https://github.com/hazyfossa/envy.git", version = "0.1.0" }
+envy = { git = "https://github.com/hazyfossa/envy.git", version = "0.1.0", features = [
+    "tokio",
+] }
 eyre = "0.6.12"
 simple-eyre = "0.3.1"
 freedesktop-session-parser = { git = "https://github.com/hazyfossa/freedesktop-session-parser", version = "0.1.0" }

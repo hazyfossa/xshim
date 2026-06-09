@@ -81,7 +81,7 @@ Are you running this from a correct place?",
     })
 }
 
-pub async fn aqquire(args: &Args) -> Result<SessionContext> {
+pub fn aqquire(args: &Args) -> Result<SessionContext> {
     Ok(match args.context.clone().unwrap_or_default() {
         ContextMode::None => SessionContext::default(),
 

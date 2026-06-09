@@ -246,9 +246,10 @@ dependencies = [
 [[package]]
 name = "envy"
 version = "0.1.0"
-source = "git+https://github.com/hazyfossa/envy.git#d17941848c3944e01d6d1f21c189ddb2718a238a"
+source = "git+https://github.com/hazyfossa/envy.git#6237046bb26a9670ef56df1fada4722a55ec3417"
 dependencies = [
  "snafu",
+ "tokio",
 ]
 
 [[package]]

@@ -2,19 +2,16 @@ mod context;
 mod systemd;
 mod utils;
 
-use std::{
-    env::home_dir,
-    fs,
-    os::unix::fs::PermissionsExt,
-    path::PathBuf,
-    process::{ChildStderr, Command},
-};
+use std::{env::home_dir, fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Stdio};
 
 use argh::FromArgs;
 use envy::{Set, define_env, diff};
 use eyre::{Context as ErrorContext, ContextCompat as ErrorContextCompat, Result};
 use freedesktop_session_parser::{SessionKind, get_session_entry};
-use tokio::io::AsyncBufReadExt;
+use tokio::{
+    io::AsyncBufReadExt,
+    process::{ChildStderr, Command},
+};
 
 use crate::{
     context::ContextMode,
@@ -25,7 +22,7 @@ use crate::{
     utils::{path::EnsureExistsExt, warn::WarnExt},
 };
 
-use lib::{Seat, VtNumber, subprocess::CleanupExt};
+use lib::{Seat, VtNumber, XShim};
 use libxshim as lib;
 
 #[derive(FromArgs)]
@@ -212,11 +209,8 @@ fn _help_skip_locks() {
 }
 
 fn logger_task(stderr: ChildStderr) -> Result<impl Future<Output = Result<()>>> {
-    let stderr = tokio::process::ChildStderr::from_std(stderr)
-        .context("Failed to set stderr pipe as async")?;
-
     let mut reader = tokio::io::BufReader::new(stderr).lines();
-    let writer = journald::JournalWriter::new()?;
+    let writer = journald::JournalWriter::new().context("Failed to create a journald writer")?;
 
     Ok(async move {
         while let Some(line) = reader.next_line().await? {
@@ -225,6 +219,33 @@ fn logger_task(stderr: ChildStderr) -> Result<impl Future<Output = Result<()>>> 
         }
         Ok(())
     })
+}
+
+// TODO: is there a point in waiting on Xorg?
+// will systemd reap the zombie as part of session logout?
+async fn start_xorg(settings: lib::Settings) -> Result<lib::XSession> {
+    let XShim {
+        xorg_command,
+        pending_session,
+    } = lib::xorg_new_with_settings(settings)?;
+
+    let mut command = Command::from(xorg_command);
+    command.stderr(Stdio::piped());
+
+    let child = command.spawn().context("Failed to spawn Xorg")?;
+    let logger = tokio::spawn(logger_task(child.stderr.unwrap())?);
+
+    match pending_session.wait_for_display() {
+        Ok(ret) => Ok(ret),
+        Err(e) => {
+            logger
+                .await
+                .unwrap()
+                .context("Failure while handling logs")?;
+
+            Err(e)
+        }
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -239,9 +260,7 @@ async fn main() -> Result<()> {
     // TODO: make this non-fatal, fallback to stderr
     journald::init().context("Failed to initialize journald client")?;
 
-    let context = context::aqquire(&args)
-        .await
-        .context("Failed to aqquire session context")?;
+    let context = context::aqquire(&args).context("Failed to aqquire session context")?;
 
     let mut notifier = match args.notify {
         true => Some(Notifier::from_env(&env).context("Failed to setup systemd notifications")?),
@@ -254,8 +273,8 @@ async fn main() -> Result<()> {
         ModeSubcommand::XinitCompat(mode) => mode.run_ext(context.vt_number.as_ref(), &env),
     }?;
 
-    let (xorg, session) = libxshim::setup_xorg_with_settings(
-        libxshim::Settings::builder()
+    let session = start_xorg(
+        lib::Settings::builder()
             .env(env)
             .maybe_path(args.xorg_path)
             .extra_args(args.xorg_args)
@@ -264,11 +283,7 @@ async fn main() -> Result<()> {
             .unsafe_skip_xauth_locks(args.skip_locks)
             .build(),
     )
-    .context("Failed to setup Xorg")?
-    .spawn()?;
-
-    let logger = logger_task(xorg.stderr.unwrap())?;
-    tokio::spawn(logger);
+    .await?;
 
     client_command.apply((
         session.client_env(),
@@ -279,10 +294,7 @@ async fn main() -> Result<()> {
         client_command.apply(context_env.into_diff());
     }
 
-    let mut client_child = client_command
-        .with_cleanup()
-        .spawn()
-        .context("Failed to spawn client")?;
+    let mut client_child = client_command.spawn().context("Failed to spawn client")?;
 
     if let Some(ref mut notifier) = notifier {
         notifier
@@ -291,9 +303,7 @@ async fn main() -> Result<()> {
             .warn();
     }
 
-    // TODO: is there a point in waiting on Xorg? Client should always close if XServer drops, right?
-    // ...will systemd reap the zombie as part of session logout?
-    client_child.wait().unwrap();
+    client_child.wait().await.unwrap();
 
     if let Some(ref mut notifier) = notifier {
         let _best_effort = notifier.notify_stopping();
