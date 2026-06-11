@@ -227,7 +227,7 @@ async fn start_xorg(settings: lib::Settings) -> Result<lib::XSession> {
     let XShim {
         xorg_command,
         pending_session,
-    } = lib::xorg_new_with_settings(settings)?;
+    } = lib::xorg_new(settings)?;
 
     let mut command = Command::from(xorg_command);
     command.stderr(Stdio::piped());
@@ -276,7 +276,7 @@ async fn main() -> Result<()> {
     let session = start_xorg(
         lib::Settings::builder()
             .env(env)
-            .maybe_path(args.xorg_path)
+            .maybe_xorg_path(args.xorg_path)
             .extra_args(args.xorg_args)
             .maybe_vt(context.vt_number)
             .maybe_seat(context.seat)

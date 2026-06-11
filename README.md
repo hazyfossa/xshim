@@ -5,7 +5,7 @@ As display managers begin to drop native support for Xorg, xshim can be used as 
 xshim replaces: startx, xinit, xorg-rootless wrapper[^1], xauth, mcookie
 [^1]: this is subject to change
 
-xshim is also available as a library. Any rust-based session manager can use it to support X sessions. Just call `libxshim::setup_xorg().spawn()`!
+xshim is also available as a library. Any rust-based session manager can use it to support X sessions. Just call `libxshim::xorg_new_default().spawn()`!
 
 xshim is not:
 - A complete display manager.
@@ -25,9 +25,8 @@ xshim is not:
 # features
 
 library:
-- bon: generates a builder for the configuration
 - client: makes your app an Xorg client after setup
 
 cli:
-- dbus: required feature for full systemd intergration (env, transient units)
+- dbus: required to import systemd-user environment
 - xrdb (WIP): loads Xresources

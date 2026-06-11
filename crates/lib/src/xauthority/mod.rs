@@ -26,7 +26,7 @@ define_env!(pub ClientAuthority(PathBuf) = #raw "XAUTHORITY");
 fn make_cookie() -> Result<Cookie> {
     let mut cookie_buf = [0u8; Cookie::BYTES_LEN];
     getrandom(&mut cookie_buf, GetRandomFlags::empty()).context("getrandom() failed")?;
-    Ok(Cookie::new(cookie_buf))
+    Ok(Cookie(cookie_buf))
 }
 
 pub fn get_xauthority_path(env: &impl envy::Get) -> Result<PathBuf> {
@@ -50,7 +50,13 @@ pub fn setup_server() -> Result<(SealedPrivateFile, Cookie)> {
         .context("Failed to create a private file via memfd")?;
 
     let mut writer = NoSeek::new(file);
-    Entry::new(&cookie, Scope::Any, Target::Server { slot: 0 }).write(&mut writer)?;
+
+    Entry::builder()
+        .cookie(cookie.clone())
+        .scope(Scope::Any)
+        .target(0)
+        .build()
+        .write(&mut writer)?;
 
     let file = writer
         .into_inner()
@@ -75,20 +81,16 @@ pub fn setup_client(
     // The wildcard entry exists so client do not break on hostname change
 
     let authority = [
-        Entry::new(
-            cookie,
-            Scope::Any,
-            Target::Client {
-                display_number: **display,
-            },
-        ),
-        Entry::new(
-            cookie,
-            Scope::Local(settings.hostname.clone()),
-            Target::Client {
-                display_number: **display,
-            },
-        ),
+        Entry::builder()
+            .cookie(cookie.clone())
+            .scope(Scope::Any)
+            .target(**display)
+            .build(),
+        Entry::builder()
+            .cookie(cookie.clone())
+            .scope(Scope::Local(settings.hostname.clone()))
+            .target(**display)
+            .build(),
     ];
 
     let path = settings.xauthority_path;

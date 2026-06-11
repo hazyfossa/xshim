@@ -136,7 +136,7 @@ fn connect_xorg(
             stream,
             0,
             xauthority::Cookie::AUTH_NAME.into(),
-            cookie.raw_data(),
+            cookie.0.to_vec(),
         )
         .ok()
     });
@@ -204,11 +204,11 @@ impl XSession {
     }
 }
 
-#[derive(Default)]
-#[cfg_attr(feature = "bon", derive(bon::Builder))]
+#[derive(bon::Builder)]
 pub struct Settings {
     /// Path to Xorg binary
-    path: Option<PathBuf>,
+    #[builder(default = DEFAULT_XORG_PATH.into())]
+    xorg_path: PathBuf,
 
     /// Override current environment
     env: Option<EnvBuf>,
@@ -217,15 +217,18 @@ pub struct Settings {
     hostname: Option<OsString>,
 
     /// VT number to use.
-    /// If set to None, it will be determined by Xorg.
+    /// If set to None, it will be queried from environment
+    /// if env query fails, an appropriate vt will be determined by Xorg
     vt: Option<VtNumber>,
 
     /// Login seat to use.
-    /// If set to None, Xorg will operate without a seat.
+    /// If set to None, it will be queried from environment
+    /// if env query fails, Xorg will operate without a seat
     seat: Option<Seat>,
 
     /// Xorg log (verbosity) level
-    log_level: Option<u8>,
+    #[builder(default = 3)]
+    log_level: u8,
 
     /// Extra arguments to pass to Xorg
     extra_args: Option<Vec<String>>,
@@ -239,20 +242,22 @@ pub struct Settings {
     /// Safety:
     /// Only set if sure no other process will interact with Xauthority while in setup.
     /// Usage with `xauthority_path` unset is generally unsafe.
-    unsafe_skip_xauth_locks: Option<bool>,
+    #[builder(default = false)]
+    unsafe_skip_xauth_locks: bool,
 }
 
-/// See `setup_xorg` for documentation
-// TODO: optionally switch user on spawn
-pub fn xorg_new_with_settings(mut settings: Settings) -> Result<XShim> {
+/// Returns a handle to a prepared instance.
+/// Think of it as a better `Command::new("Xorg")`
+///
+/// You can resolve the handle into a running Xorg process via `.spawn()`
+/// Or spawn `.xorg_command` manually, then call `.wait_for_display()`
+pub fn xorg_new(mut settings: Settings) -> Result<XShim> {
     let env = settings.env.take().unwrap_or(OsEnv::new_view().into());
 
     let vt = settings.vt.or(env.get().ok());
     let seat = settings.seat.or(env.get().ok());
     let hostname = settings.hostname.unwrap_or(hostname::current());
-    let xorg_path = settings.path.unwrap_or(DEFAULT_XORG_PATH.into());
-    let log_level = settings.log_level.unwrap_or(3);
-    let skip_locks = settings.unsafe_skip_xauth_locks.unwrap_or(false);
+
     let xauthority_path = settings
         .xauthority_path
         .unwrap_or(xauthority::get_xauthority_path(&env)?);
@@ -263,15 +268,15 @@ pub fn xorg_new_with_settings(mut settings: Settings) -> Result<XShim> {
     let client_authority_settings = ClientAuthoritySettings {
         xauthority_path,
         hostname,
-        skip_locks,
+        skip_locks: settings.unsafe_skip_xauth_locks,
     };
 
     let (display_receiver, xorg) = prepare_xorg(
-        xorg_path,
+        settings.xorg_path,
         vt,
         seat,
         server_authority,
-        log_level,
+        settings.log_level,
         settings.extra_args,
     )?;
 
@@ -285,13 +290,7 @@ pub fn xorg_new_with_settings(mut settings: Settings) -> Result<XShim> {
     })
 }
 
-/// Returns a handle to a prepared instance.
-/// Think of it as a better `Command::new("Xorg")`
-///
-/// You can resolve the handle into a running Xorg process via `.spawn()`
-/// Or spawn `.xorg_command` manually, then call `.wait_for_display()`
-///
-/// See `xorg_new_with_settings` if you want control over the instance.
-pub fn xorg_new() -> Result<XShim> {
-    xorg_new_with_settings(Settings::default())
+/// See `xorg_new_with_settings` for documentation
+pub fn xorg_new_default() -> Result<XShim> {
+    xorg_new(Settings::builder().build())
 }

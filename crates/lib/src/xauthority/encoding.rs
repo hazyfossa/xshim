@@ -17,99 +17,87 @@ pub enum Family {
     LocalHost = 252,
 }
 
-fn bound_len<B: TryFrom<usize>, T>(value: &T, field: &str) -> Result<B, binrw::Error> {
-    size_of_val(value)
-        .try_into()
-        .map_err(|_| binrw::Error::Custom {
-            pos: 0,
-            err: Box::new(format!("overflow at field {field}")),
-        })
-}
-
 #[binrw]
 #[brw(little)]
-#[derive(ZeroizeOnDrop)]
+#[derive(ZeroizeOnDrop, bon::Builder)]
 pub struct Entry {
+    #[builder(setters(vis = ""))]
     family: Family,
 
-    #[bw(calc = {bound_len(&address, "address")?})]
+    #[builder(skip)]
+    #[bw(try_calc = address.len().try_into())]
     address_len: u16,
+    #[builder(setters(vis = ""))]
     #[br(count = address_len)]
     pub address: Vec<u8>,
 
-    #[bw(calc = {bound_len(&display, "display")?})]
+    #[builder(skip)]
+    #[bw(try_calc = display.len().try_into())]
     display_len: u16,
+    #[builder(setters(vis = ""))]
     #[br(count = display_len)]
-    pub display: Vec<u16>,
+    pub display: Vec<u8>,
 
-    #[bw(calc = {bound_len(&name, "name")?})]
+    #[builder(skip)]
+    #[bw(try_calc = name.len().try_into())]
     name_len: u16,
+    #[builder(setters(vis = ""))]
     #[br(count = name_len)]
     pub name: Vec<u8>,
 
-    #[bw(calc = {bound_len(&data, "data")?})]
+    #[builder(skip)]
+    #[bw(try_calc = data.len().try_into())]
     data_len: u16,
+    #[builder(setters(vis = ""))]
     #[br(count = data_len)]
     pub data: Vec<u8>,
 }
 
-pub enum Target {
-    Server { slot: u16 },
-    Client { display_number: u16 },
-}
-
-impl From<Target> for u16 {
-    fn from(value: Target) -> Self {
-        match value {
-            Target::Server { slot } => slot,
-            Target::Client { display_number } => display_number,
-        }
+use entry_builder as b;
+impl<S: b::State> EntryBuilder<S> {
+    pub fn cookie(self, cookie: Cookie) -> EntryBuilder<b::SetData<b::SetName<S>>>
+    where
+        S::Data: b::IsUnset,
+        S::Name: b::IsUnset,
+    {
+        let name = Cookie::AUTH_NAME.to_string().into_bytes();
+        let data = cookie.0.to_vec();
+        self.name(name).data(data)
     }
-}
 
-pub enum Scope {
-    Local(Hostname),
-    Any,
-}
+    /// For server authority files, slot is an arbitrary identifier
+    /// the only requirement is that slots do not repeat in the same file
+    ///
+    /// For client authority files, slot is display number
+    pub fn target(self, slot: u16) -> EntryBuilder<b::SetDisplay<S>>
+    where
+        S::Display: b::IsUnset,
+    {
+        self.display(slot.to_string().into_bytes())
+    }
 
-impl From<Scope> for (Family, Hostname) {
-    fn from(value: Scope) -> Self {
-        match value {
-            Scope::Local(hostname) => (Family::Local, hostname),
-            Scope::Any => (Family::Wild, "127.0.0.2".into()),
+    pub fn scope(self, scope: Scope) -> EntryBuilder<b::SetAddress<b::SetFamily<S>>>
+    where
+        S::Address: b::IsUnset,
+        S::Family: b::IsUnset,
+    {
+        match scope {
+            Scope::Local(hostname) => self.family(Family::Local).address(hostname.into_vec()),
+            Scope::Any => self.family(Family::Wild).address("127.0.0.2".into()),
         }
     }
 }
 
 // Technically, this should be a trait "AuthMethod"
 // Practically, cookie is the only method that is currently used
-#[derive(ZeroizeOnDrop)]
-pub struct Cookie([u8; Self::BYTES_LEN]);
+#[derive(ZeroizeOnDrop, Clone)]
+pub struct Cookie(pub(crate) [u8; Self::BYTES_LEN]);
 impl Cookie {
     pub const BYTES_LEN: usize = 16; // 16 * 8 = 128 random bits
     pub const AUTH_NAME: &str = "MIT-MAGIC-COOKIE-1";
-
-    pub fn new(random_bytes: [u8; Self::BYTES_LEN]) -> Self {
-        Self(random_bytes)
-    }
-
-    pub fn raw_data(&self) -> Vec<u8> {
-        self.0.into()
-    }
 }
 
-impl Entry {
-    pub fn new(cookie: &Cookie, scope: Scope, target: Target) -> Entry {
-        let (family, address) = scope.into();
-
-        Entry {
-            family,
-            address: address.into_vec(),
-            display: vec![target.into()],
-            name: Cookie::AUTH_NAME.into(),
-            data: cookie.raw_data(),
-        }
-    }
+pub enum Scope {
+    Local(Hostname),
+    Any,
 }
-
-// TODO: test coverage
