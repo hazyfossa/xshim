@@ -285,6 +285,8 @@ async fn main() -> Result<()> {
     )
     .await?;
 
+    println!("Finish wait");
+
     client_command.apply((
         session.client_env(),
         (diff::unset::<VtNumber>(), diff::unset::<Seat>()),

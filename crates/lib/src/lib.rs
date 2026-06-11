@@ -115,7 +115,7 @@ fn prepare_xorg(
 
     command
         .stdout(Stdio::null())
-        .arg("-logfile /dev/null")
+        .args(["-logfile", "/dev/null"])
         .args(["-verbose", &log_level.to_string()]);
 
     // display receiver
