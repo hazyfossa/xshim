@@ -7,7 +7,7 @@ use std::{
 };
 
 use envy::{Get, OsEnv, container::EnvBuf, define_env};
-use eyre::{Context, Result, bail};
+use eyre::{Context, OptionExt, Result, bail, ensure};
 
 use crate::{
     utils::{
@@ -30,7 +30,29 @@ const DEFAULT_XORG_PATH: &str = "/usr/lib/Xorg";
 
 define_env!(pub Seat(String) = "XDG_SEAT");
 define_env!(pub VtNumber(u32) = "XDG_VTNR");
-define_env!(pub Display(u16) = "DISPLAY");
+
+define_env!(pub Display(u16) = #custom "DISPLAY");
+impl envy::parse::EnvironmentParse<String> for Display {
+    type Error = eyre::Error;
+
+    fn env_serialize(self) -> String {
+        format!(":{}", self.0)
+    }
+
+    fn env_deserialize(raw: String) -> Result<Self> {
+        let (prefix, number) = raw
+            .split_once(":")
+            .ok_or_eyre("Display should start with :")?;
+
+        ensure!(
+            prefix.is_empty(),
+            "Currently xshim does not support authenticating this type of  remote Xorg display"
+        );
+
+        let number = number.parse().wrap_err("Display should be a number")?;
+        Ok(Self(number))
+    }
+}
 
 struct DisplayReceiver(PipeReader);
 
