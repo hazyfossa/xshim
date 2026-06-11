@@ -17,8 +17,20 @@ pub enum Family {
     LocalHost = 252,
 }
 
+// The .Xauthority file is a binary file consisting of a sequence of entries
+// in the following format:
+//
+//	 2 bytes		Family value (second byte is as in protocol HOST)
+//	 2 bytes		address length (always MSB first)
+//	 A bytes		host address (as in protocol HOST)
+//	 2 bytes		display "number" length (always MSB first)
+//	 S bytes		display "number" string
+//	 2 bytes		name length (always MSB first)
+//	 N bytes		authorization name string
+//	 2 bytes		data length (always MSB first)
+//	 D bytes		authorization data string
 #[binrw]
-#[brw(little)]
+#[brw(big)]
 #[derive(ZeroizeOnDrop, bon::Builder)]
 pub struct Entry {
     #[builder(setters(vis = ""))]
@@ -100,4 +112,49 @@ impl Cookie {
 pub enum Scope {
     Local(Hostname),
     Any,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use binrw::{BinWrite, io::NoSeek, meta::WriteEndian};
+    use pretty_assertions::assert_eq;
+
+    fn write_to_vec<T>(value: T) -> Vec<u8>
+    where
+        T: BinWrite + WriteEndian,
+        for<'a> T::Args<'a>: std::default::Default,
+    {
+        let bytes: Vec<u8> = Vec::with_capacity(size_of_val(&value));
+        let mut writer = NoSeek::new(bytes);
+        value.write(&mut writer).unwrap();
+        writer.into_inner()
+    }
+
+    #[test]
+    fn xauth_output_parity() {
+        const XAUTH_OUT: &[u8] = &[
+            0x01, 0x00, 0x00, 0x07, 0x64, 0x65, 0x73, 0x6b, 0x74, 0x6f, 0x70, 0x00, 0x01, 0x30,
+            0x00, 0x12, 0x4d, 0x49, 0x54, 0x2d, 0x4d, 0x41, 0x47, 0x49, 0x43, 0x2d, 0x43, 0x4f,
+            0x4f, 0x4b, 0x49, 0x45, 0x2d, 0x31, 0x00, 0x10, 0xb5, 0xb4, 0x90, 0x32, 0x32, 0x76,
+            0x53, 0x7a, 0x14, 0x36, 0xd7, 0x7e, 0xa3, 0xec, 0xbd, 0x36,
+        ];
+
+        const COOKIE: Cookie = Cookie([
+            0xb5, 0xb4, 0x90, 0x32, 0x32, 0x76, 0x53, 0x7a, 0x14, 0x36, 0xd7, 0x7e, 0xa3, 0xec,
+            0xbd, 0x36,
+        ]);
+
+        const HOSTNAME: &str = "desktop";
+
+        let entry = Entry::builder()
+            .cookie(COOKIE)
+            .target(0)
+            .scope(Scope::Local(HOSTNAME.into()))
+            .build();
+
+        let bytes = write_to_vec(entry);
+
+        assert_eq!(bytes.as_slice(), XAUTH_OUT)
+    }
 }

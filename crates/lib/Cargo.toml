@@ -14,3 +14,6 @@ zeroize = { version = "1.8.2", features = ["derive"] }
 
 [features]
 client = ["dep:x11rb"]
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
